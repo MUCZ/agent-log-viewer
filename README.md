@@ -12,6 +12,8 @@ npm start
 
 Open [Worklog](http://127.0.0.1:3737). The server binds only to loopback. It reads `CODEX_HOME` when set, otherwise `~/.codex`. Set `PORT` to use a different port.
 
+To start Worklog automatically at login and keep it running in the background, see [macOS installation](INSTALLATION.md).
+
 Choose **By date** for a daily overview, or **By project** to browse a working directory's sessions by most recent activity. Cmd-K focuses session search in the current view. Open a session to read its prompts, see changed files, or copy its Codex resume command.
 
 With Ghostty installed, **Open in Ghostty** opens the working directory from a project header or session drawer.
