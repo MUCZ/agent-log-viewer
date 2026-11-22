@@ -9,6 +9,7 @@ const glyphs = {
   tokens: ['m13 2-8 11h6l-1 9 9-12h-6l1-8Z'],
   file: ['M14 3H6v18h12V7l-4-4Zm0 0v5h4M9 12h6m-6 4h6'],
   folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z'],
+  terminal: ['M4 5h16v14H4z', 'm7 9 3 3-3 3m6 0h4'],
   left: ['m14 6-6 6 6 6'],
   right: ['m10 6 6 6-6 6'],
   down: ['m6 9 6 6 6-6'],
@@ -44,6 +45,37 @@ function button(className, label, glyph) {
   node.setAttribute('aria-label', label);
   node.title = label;
   return node;
+}
+
+function ghosttyAction(cwd) {
+  if (!cwd?.startsWith('/')) return null;
+  const label = el('span', '', 'Open in Ghostty');
+  const open = el('button', 'ghostty-button', icon('terminal'), label);
+  open.type = 'button';
+  const status = el('span', 'ghostty-status');
+  status.setAttribute('role', 'status');
+  open.addEventListener('click', async () => {
+    open.disabled = true;
+    label.textContent = 'Opening…';
+    status.textContent = '';
+    try {
+      const response = await fetch('/api/open-in-ghostty', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd }),
+      });
+      if (!response.ok) {
+        const result = await response.json();
+        status.textContent = result.error || 'Could not open Ghostty.';
+      }
+    } catch {
+      status.textContent = 'Could not reach the local Ghostty opener.';
+    } finally {
+      open.disabled = false;
+      label.textContent = 'Open in Ghostty';
+    }
+  });
+  return el('div', 'ghostty-action', open, status);
 }
 
 const dayFormat = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
@@ -89,21 +121,34 @@ const search = $('#search');
 const detail = $('#detail');
 const detailContent = $('#detail-content');
 const main = $('#main');
+const viewButtons = [...document.querySelectorAll('.view-nav button')];
+const searches = { date: '', project: '' };
 let snapshot;
 let snapshotText;
+let histories = new Map();
+let view = 'date';
+let currentProject;
 let day;
 let project = '';
-let query = '';
 let savedDay;
 let detailRequest = 0;
 let detailTrigger;
 let briefOpen = false;
 const collapsed = new Set();
 
-$('#bar-icon').append(icon('activity'));
 $('#search-icon').append(icon('search'));
 $('#close-detail').append(icon('close'));
 $('#close-detail').addEventListener('click', () => detail.close());
+for (const control of viewButtons) {
+  control.prepend(icon(control.dataset.view === 'date' ? 'calendar' : 'folder'));
+  control.addEventListener('click', () => {
+    if (!snapshot || view === control.dataset.view) return;
+    view = control.dataset.view;
+    search.value = searches[view];
+    render();
+    window.scrollTo(0, 0);
+  });
+}
 detail.addEventListener('click', event => {
   if (event.target === detail) detail.close();
 });
@@ -123,16 +168,21 @@ document.addEventListener('keydown', event => {
 });
 if (!navigator.platform.startsWith('Mac')) $('#search-shortcut').textContent = 'Ctrl K';
 
-function matches(entry) {
-  return (!project || entry.cwd === project) && (!query || [
+function searchQuery(mode) {
+  return searches[mode].trim().toLocaleLowerCase();
+}
+
+function matchesSearch(entry, query) {
+  return !query || [
     entry.title, entry.preview, entry.projectName, entry.cwd, ...entry.files,
-  ].some(value => value.toLocaleLowerCase().includes(query)));
+  ].some(value => value.toLocaleLowerCase().includes(query));
 }
 
 function byDay() {
   const days = new Map();
+  const query = searchQuery('date');
   for (const entry of snapshot.sessions) {
-    if (!matches(entry)) continue;
+    if ((project && entry.cwd !== project) || !matchesSearch(entry, query)) continue;
     if (!days.has(entry.day)) days.set(entry.day, []);
     days.get(entry.day).push(entry);
   }
@@ -159,16 +209,25 @@ function applyFilter() {
 
 search.addEventListener('input', () => {
   if (!snapshot) return;
-  const next = search.value.trim().toLocaleLowerCase();
-  if (!query && next) savedDay = day;
-  if (query && !next && savedDay) day = savedDay;
-  query = next;
-  applyFilter();
+  const previous = searchQuery(view);
+  searches[view] = search.value;
+  if (view === 'date') {
+    const next = searchQuery(view);
+    if (!previous && next) savedDay = day;
+    if (previous && !next && savedDay) day = savedDay;
+    applyFilter();
+  } else {
+    render();
+  }
 });
-search.addEventListener('keydown', event => {
-  if (event.key !== 'Escape' || !search.value) return;
+
+function clearSearch() {
   search.value = '';
   search.dispatchEvent(new Event('input'));
+}
+
+search.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && search.value) clearSearch();
 });
 
 function renderDates(days) {
@@ -222,6 +281,92 @@ function metric(glyph, label, value, caption, title) {
   return tile;
 }
 
+function indexProjects(entries) {
+  const index = new Map();
+  for (const entry of entries) {
+    if (!index.has(entry.cwd)) {
+      index.set(entry.cwd, { cwd: entry.cwd, name: entry.projectName, lastActive: entry.end, sessions: new Map() });
+    }
+    const history = index.get(entry.cwd);
+    history.lastActive = Math.max(history.lastActive, entry.end);
+    if (!history.sessions.has(entry.id)) history.sessions.set(entry.id, []);
+    history.sessions.get(entry.id).push(entry);
+  }
+  return new Map([...index].sort(([, a], [, b]) =>
+    b.sessions.size - a.sessions.size || b.lastActive - a.lastActive || a.name.localeCompare(b.name)));
+}
+
+function combineSession(entries) {
+  const slices = [...entries].sort((a, b) => a.start - b.start);
+  const first = slices[0];
+  const last = slices.at(-1);
+  const summary = {
+    ...last,
+    start: first.start,
+    firstDay: first.day,
+    activityDays: slices.map(entry => entry.day),
+    activeMs: 0,
+    turns: 0,
+    tokens: { input: 0, output: 0, total: 0 },
+    files: [...new Set(slices.flatMap(entry => entry.files))].sort(),
+  };
+  for (const slice of slices) {
+    summary.activeMs += slice.activeMs;
+    summary.turns += slice.turns;
+    summary.tokens.input += slice.tokens.input;
+    summary.tokens.output += slice.tokens.output;
+    summary.tokens.total += slice.tokens.total;
+  }
+  summary.preview ||= slices.findLast(slice => slice.preview)?.preview ?? '';
+  summary.model ||= slices.findLast(slice => slice.model)?.model ?? null;
+  return summary;
+}
+
+function parentPath(cwd) {
+  if (!cwd || cwd === '/') return '';
+  const parent = cwd.slice(0, cwd.lastIndexOf('/')) || '/';
+  const parts = parent.split('/').filter(Boolean);
+  return parts.length > 3 ? `…/${parts.slice(-3).join('/')}` : parent;
+}
+
+function renderProjectList() {
+  const projects = $('#project-list');
+  const { scrollTop, scrollLeft } = projects;
+  projects.replaceChildren();
+  for (const history of histories.values()) {
+    const location = parentPath(history.cwd);
+    const item = el('button', `date-item sidebar-project tone-${projectColor.get(history.cwd)}`,
+      el('span', 'sidebar-project-mark'),
+      el('span', 'sidebar-project-label', el('span', 'date-name', history.name),
+        location ? el('span', 'date-description sidebar-project-path', location) : null),
+      el('span', 'date-count', number.format(history.sessions.size)));
+    item.type = 'button';
+    item.title = history.cwd || history.name;
+    item.setAttribute('aria-label', `${item.title} · ${count(history.sessions.size, 'session')}`);
+    if (history.cwd === currentProject) item.setAttribute('aria-current', 'true');
+    item.addEventListener('click', () => {
+      if (currentProject === history.cwd) return;
+      currentProject = history.cwd;
+      search.value = searches.project = '';
+      render();
+      main.querySelector('h1')?.focus({ preventScroll: true });
+      window.scrollTo(0, 0);
+    });
+    projects.append(item);
+  }
+  projects.scrollTop = scrollTop;
+  projects.scrollLeft = scrollLeft;
+  const selected = projects.querySelector('[aria-current]');
+  if (selected) {
+    const item = selected.getBoundingClientRect();
+    const list = projects.getBoundingClientRect();
+    if (item.left < list.left) projects.scrollLeft += item.left - list.left;
+    if (item.right > list.right) projects.scrollLeft += item.right - list.right;
+    if (item.top < list.top) projects.scrollTop += item.top - list.top;
+    if (item.bottom > list.bottom) projects.scrollTop += item.bottom - list.bottom;
+  }
+}
+
 function projectGroups(entries) {
   const groups = new Map();
   for (const entry of entries) {
@@ -254,13 +399,11 @@ function projectIndex(groups, cards) {
       segment.title = `${group.name} · ${percent}%`;
       segments.append(segment);
     }
-    const parent = group.cwd.slice(0, group.cwd.lastIndexOf('/')) || '/';
-    const parts = parent.split('/').filter(Boolean);
-    const location = parts.length > 3 ? `…/${parts.slice(-3).join('/')}` : parent;
+    const location = parentPath(group.cwd);
     const jump = el('button', `project-jump tone-${group.color}`,
       el('span', 'project-jump-mark'),
       el('span', 'project-jump-label', el('strong', '', group.name),
-        group.cwd && group.cwd !== '/' ? el('span', 'project-jump-path', location) : null),
+        location ? el('span', 'project-jump-path', location) : null),
       el('span', 'project-share', `${percent}%`));
     jump.type = 'button';
     jump.title = group.cwd || group.name;
@@ -282,15 +425,14 @@ function projectIndex(groups, cards) {
 }
 
 function projectFilter() {
-  const available = new Map(snapshot.sessions.map(entry => [entry.cwd, entry.projectName]));
+  const available = [...histories.values()].sort((a, b) => a.name.localeCompare(b.name));
   const select = el('select', '');
   select.id = 'project';
   select.setAttribute('aria-label', 'Filter by project');
   select.append(new Option('All projects', ''));
-  const labels = [...available.values()];
-  for (const [cwd, name] of [...available].sort((a, b) => a[1].localeCompare(b[1]))) {
+  for (const { cwd, name } of available) {
     if (!cwd) continue;
-    const label = labels.filter(value => value === name).length > 1 ? cwd : name;
+    const label = available.some(other => other.name === name && other.cwd !== cwd) ? cwd : name;
     const option = new Option(label, cwd);
     option.title = cwd;
     select.append(option);
@@ -319,8 +461,10 @@ function sessionRow(entry, peakTokens) {
   const usage = el('span', 'row-stat',
     el('span', 'row-tokens', tokens ? `${compact.format(tokens)} tokens` : '—'), tokenBar);
   usage.title = tokens ? `${number.format(tokens)} tokens` : 'No token usage recorded';
+  const time = el('span', 'time-range', entry.activityDays ? clock.format(entry.end) : timeRange(entry));
+  if (entry.activityDays) time.title = 'Last recorded activity';
   const session = el('button', 'session-row',
-    el('span', 'row-time', el('span', 'time-range', timeRange(entry)), fileInfo),
+    el('span', 'row-time', time, fileInfo),
     el('span', 'session-info', label, preview),
     usage,
     el('span', 'row-chevron', icon('right')));
@@ -364,10 +508,51 @@ function dailySummary(groups) {
   return section;
 }
 
-function render() {
+function sessionMetrics(entries, caption, includeActiveTime = false) {
+  const totals = entries.reduce((sum, entry) => {
+    sum.activeMs += entry.activeMs;
+    sum.input += entry.tokens.input;
+    sum.output += entry.tokens.output;
+    sum.tokens += entry.tokens.total;
+    return sum;
+  }, { activeMs: 0, input: 0, output: 0, tokens: 0 });
+  const uniqueFiles = new Set(entries.flatMap(entry => entry.files.map(file =>
+    file.startsWith('/') ? file : `${entry.cwd}/${file}`))).size;
+  const tiles = [
+    metric('layers', 'Sessions', number.format(entries.length), caption),
+    metric('tokens', 'Tokens', compact.format(totals.tokens), `${compact.format(totals.input)} in · ${compact.format(totals.output)} out`,
+      `${number.format(totals.input)} input · ${number.format(totals.output)} output · ${number.format(totals.tokens)} total`),
+    metric('file', 'Changed files', number.format(uniqueFiles), 'From recorded edits',
+      'Counts unique file paths reported by successful Codex patch events. Shell edits may be absent.'),
+  ];
+  if (includeActiveTime) {
+    tiles.push(metric('clock', 'Active time', duration(totals.activeMs), 'Approximate',
+      'Adds activity within each session. Gaps over 10 minutes are excluded. Sessions can overlap.'));
+  }
+  return el('div', includeActiveTime ? 'metrics' : 'metrics project-metrics', ...tiles);
+}
+
+function sessionHeading(title, peakTokens, scaleScope) {
+  const scale = peakTokens ? el('span', 'token-scale', 'Token use') : null;
+  if (scale) scale.title = `Bar lengths are relative to the highest token total ${scaleScope}`;
+  return el('div', 'timeline-heading', el('h2', '', title), scale);
+}
+
+function emptyView(glyph, heading, message, clearLabel, onClear) {
+  const empty = el('section', 'empty',
+    el('span', 'empty-icon', icon(glyph)), el('h2', '', heading), el('p', '', message));
+  if (onClear) {
+    const clear = el('button', 'plain-button', clearLabel);
+    clear.type = 'button';
+    clear.addEventListener('click', onClear);
+    empty.append(clear);
+  }
+  return empty;
+}
+
+function dateView() {
   const days = byDay();
   renderDates(days);
-  main.setAttribute('aria-busy', 'false');
   const dates = [...days.keys()];
   const entries = days.get(day) || [];
   const groups = projectGroups(entries);
@@ -390,57 +575,101 @@ function render() {
   const nodes = [heading];
 
   if (entries.length) {
-    const totals = entries.reduce((sum, entry) => {
-      sum.activeMs += entry.activeMs;
-      sum.input += entry.tokens.input;
-      sum.output += entry.tokens.output;
-      sum.tokens += entry.tokens.total;
-      return sum;
-    }, { activeMs: 0, input: 0, output: 0, tokens: 0 });
-    const uniqueFiles = new Set(entries.flatMap(entry => entry.files.map(file =>
-      file.startsWith('/') ? file : `${entry.cwd}/${file}`))).size;
-    nodes.push(el('div', 'metrics',
-      metric('layers', 'Sessions', number.format(entries.length), `Across ${count(groups.length, 'project')}`),
-      metric('tokens', 'Tokens', compact.format(totals.tokens), `${compact.format(totals.input)} in · ${compact.format(totals.output)} out`,
-        `${number.format(totals.input)} input · ${number.format(totals.output)} output · ${number.format(totals.tokens)} total`),
-      metric('file', 'Changed files', number.format(uniqueFiles), 'From recorded edits',
-        'Counts unique file paths reported by successful Codex patch events. Shell edits may be absent.'),
-      metric('clock', 'Active time', duration(totals.activeMs), 'Approximate',
-        'Adds activity within each session. Gaps over 10 minutes are excluded. Sessions can overlap.')));
+    nodes.push(sessionMetrics(entries, `Across ${count(groups.length, 'project')}`, true));
     const peakTokens = snapshot.sessions.reduce((peak, entry) =>
       entry.day === day ? Math.max(peak, entry.tokens.total) : peak, 0);
-    const scale = peakTokens ? el('span', 'token-scale', 'Token use') : null;
-    if (scale) scale.title = 'Bar lengths are relative to the highest token total for this date';
     const cards = groups.map(group => groupCard(group, peakTokens));
     const timeline = el('section', 'timeline',
-      el('div', 'timeline-heading', el('h2', '', 'Sessions'), scale),
+      sessionHeading('Sessions', peakTokens, 'for this date'),
       ...cards);
     const rail = el('aside', 'activity-rail', projectIndex(groups, cards), dailySummary(groups));
     rail.setAttribute('aria-label', 'Daily overview');
     nodes.push(el('div', 'activity-layout', timeline, rail));
   } else {
-    const filtered = Boolean(query || project);
-    const empty = el('section', 'empty',
-      el('span', 'empty-icon', icon(filtered ? 'search' : 'calendar')),
-      el('h2', '', filtered ? 'No matching sessions' : 'No Codex activity yet'),
-      el('p', '', filtered ? 'Try a different search or project.' : 'Local sessions will appear here after Codex starts recording activity.'));
-    if (filtered) {
-      const clear = el('button', 'plain-button', 'Clear filters');
-      clear.type = 'button';
-      clear.addEventListener('click', () => {
+    const filtered = Boolean(searchQuery('date') || project);
+    nodes.push(filtered
+      ? emptyView('search', 'No matching sessions', 'Try a different search or project.', 'Clear filters', () => {
         project = '';
-        search.value = '';
-        if (query) search.dispatchEvent(new Event('input'));
-        else applyFilter();
+        clearSearch();
         search.focus();
-      });
-      empty.append(clear);
-    }
-    nodes.push(empty);
+      })
+      : emptyView('calendar', 'No Codex activity yet', 'Local sessions will appear here after Codex starts recording activity.'));
   }
+  return nodes;
+}
+
+function projectView() {
+  if (!histories.has(currentProject)) {
+    currentProject = project && histories.has(project) ? project : histories.keys().next().value;
+  }
+  renderProjectList();
+  const history = histories.get(currentProject);
+  if (!history) return [emptyView('folder', 'No projects yet', 'Projects will appear here after Codex records a session.')];
+
+  const title = el('h1', '', history.name);
+  title.tabIndex = -1;
+  const tone = `tone-${projectColor.get(history.cwd)}`;
+  const heading = el('section', `project-page-heading ${tone}`,
+    el('span', 'project-glyph', icon('folder')),
+    el('div', 'project-page-title', title, el('code', 'project-path', history.cwd || 'Working directory unavailable')),
+    ghosttyAction(history.cwd));
+
+  const query = searchQuery('project');
+  const recent = [];
+  let peakTokens = 0;
+  for (const slices of history.sessions.values()) {
+    const entry = combineSession(slices);
+    peakTokens = Math.max(peakTokens, entry.tokens.total);
+    if (slices.some(slice => matchesSearch(slice, query))) recent.push(entry);
+  }
+  recent.sort((a, b) => b.end - a.end);
+
+  if (!recent.length) {
+    return [heading,
+      emptyView('search', 'No matching sessions', 'Try a different search in this project.', 'Clear search', () => {
+        clearSearch();
+        search.focus();
+      })];
+  }
+
+  const dates = new Map();
+  for (const entry of recent) {
+    if (!dates.has(entry.day)) dates.set(entry.day, []);
+    dates.get(entry.day).push(entry);
+  }
+  const activeDays = new Set(recent.flatMap(entry => entry.activityDays)).size;
+  const metrics = sessionMetrics(recent, query ? `Of ${count(history.sessions.size, 'project session')}` : `Across ${count(activeDays, 'day')}`);
+  const timeline = el('section', `timeline project-timeline ${tone}`,
+    sessionHeading('Recent sessions', peakTokens, 'in this project'));
+  for (const [date, entries] of dates) {
+    const label = date === snapshot.today ? `Today · ${formatDay(date)}` : dayFormat.format(parseDay(date));
+    const year = date.slice(0, 4) !== snapshot.today.slice(0, 4) ? `, ${date.slice(0, 4)}` : '';
+    timeline.append(el('section', 'project-day',
+      el('div', 'project-day-heading',
+        el('h3', '', label + year), el('span', 'muted', count(entries.length, 'session'))),
+      ...entries.map(entry => sessionRow(entry, peakTokens))));
+  }
+  return [heading, metrics, timeline];
+}
+
+function render() {
+  const byProject = view === 'project';
+  for (const control of viewButtons) {
+    control.setAttribute('aria-pressed', String(control.dataset.view === view));
+  }
+  $('#history').hidden = byProject;
+  $('#project-history').hidden = !byProject;
+  const viewLabel = byProject ? 'Project history' : 'Daily activity';
+  $('#view-label').textContent = viewLabel;
+  document.title = `Worklog · ${viewLabel}`;
+  $('#bar-icon').replaceChildren(icon(byProject ? 'folder' : 'activity'));
+  search.placeholder = byProject ? 'Search this project…' : 'Search sessions…';
+  search.setAttribute('aria-label', byProject ? 'Search sessions in this project' : 'Search sessions');
+  const nodes = byProject ? projectView() : dateView();
   if (snapshot.unreadable) {
     nodes.push(el('p', 'read-note', `${count(snapshot.unreadable, 'log')} could not be read.`));
   }
+  main.setAttribute('aria-busy', 'false');
   main.replaceChildren(...nodes);
 }
 
@@ -484,9 +713,17 @@ function resumePanel(entry) {
 async function openDetail(entry, trigger) {
   const request = ++detailRequest;
   detailTrigger = trigger;
+  const activityDays = entry.activityDays ?? [entry.day];
+  const spansDays = activityDays.length > 1;
+  const dateRange = spansDays
+    ? `${formatDay(entry.firstDay)} ${clock.format(entry.start)} – ${formatDay(entry.day)} ${clock.format(entry.end)}`
+    : `${formatDay(entry.day)} · ${timeRange(entry)}`;
   const heading = el('div', 'detail-intro',
-    el('p', 'detail-date', `${formatDay(entry.day)} · ${timeRange(entry)}${entry.archived ? ' · Archived' : ''}`),
-    el('h2', '', entry.title), el('p', 'detail-path', icon('folder'), entry.cwd || 'Working directory unavailable'));
+    el('p', 'detail-date', `${dateRange}${entry.archived ? ' · Archived' : ''}`),
+    el('h2', '', entry.title),
+    el('div', 'detail-location',
+      el('p', 'detail-path', icon('folder'), entry.cwd || 'Working directory unavailable'),
+      ghosttyAction(entry.cwd)));
   heading.querySelector('h2').id = 'detail-title';
   const stats = el('dl', 'detail-stats',
     el('div', '', el('dt', '', 'Active time'), el('dd', '', duration(entry.activeMs))),
@@ -498,7 +735,7 @@ async function openDetail(entry, trigger) {
     files.append(el('ul', 'file-list', ...entry.files.map(file =>
       el('li', '', icon('file'), el('code', '', file)))));
   } else {
-    files.append(el('p', 'muted', 'No file edits recorded for this day.'));
+    files.append(el('p', 'muted', spansDays ? 'No file edits recorded.' : 'No file edits recorded for this day.'));
   }
   const prompts = el('section', 'detail-section', el('h3', '', 'User prompts',
     el('span', 'detail-count', number.format(entry.turns))));
@@ -509,18 +746,23 @@ async function openDetail(entry, trigger) {
   detail.showModal();
   $('#close-detail').focus();
   try {
-    const params = new URLSearchParams({ day: entry.day, id: entry.id });
-    const response = await fetch(`/api/session?${params}`);
-    if (!response.ok) throw new Error('Unavailable');
-    const data = await response.json();
+    const promptDays = await Promise.all(activityDays.map(async date => {
+      const params = new URLSearchParams({ day: date, id: entry.id });
+      const response = await fetch(`/api/session?${params}`);
+      if (!response.ok) throw new Error('Unavailable');
+      const data = await response.json();
+      return data.prompts.map(prompt => ({ ...prompt, day: date }));
+    }));
     if (request !== detailRequest) return;
-    promptBody.replaceChildren(data.prompts.length
-      ? el('ol', 'prompt-list', ...data.prompts.map(prompt => {
-        const time = el('time', '', clock.format(prompt.time));
+    const prompts = promptDays.flat().sort((a, b) => a.time - b.time);
+    promptBody.replaceChildren(prompts.length
+      ? el('ol', 'prompt-list', ...prompts.map(prompt => {
+        const displayTime = clock.format(prompt.time);
+        const time = el('time', '', spansDays ? `${formatDay(prompt.day)} · ${displayTime}` : displayTime);
         time.dateTime = new Date(prompt.time).toISOString();
         return el('li', '', time, el('p', '', prompt.text));
       }))
-      : el('p', 'muted', 'No user prompts recorded for this day.'));
+      : el('p', 'muted', spansDays ? 'No user prompts recorded.' : 'No user prompts recorded for this day.'));
   } catch {
     if (request === detailRequest) promptBody.replaceChildren(el('p', 'muted', 'Prompts could not be loaded.'));
   }
@@ -542,8 +784,9 @@ async function refresh() {
         projectColor.set(entry.cwd, projectColors[projectColor.size % projectColors.length]);
       }
     }
-    if (!day || !previous?.sessions.length && !query && !project) day = snapshot.sessions[0]?.day || snapshot.today;
-    if (project && !snapshot.sessions.some(entry => entry.cwd === project)) project = '';
+    histories = indexProjects(snapshot.sessions);
+    if (!day || !previous?.sessions.length && !searchQuery('date') && !project) day = snapshot.sessions[0]?.day || snapshot.today;
+    if (project && !histories.has(project)) project = '';
     render();
   } catch {
     if (snapshot) return;
@@ -557,5 +800,6 @@ async function refresh() {
 
 await refresh();
 setInterval(() => {
-  if (!document.hidden && !detail.open && !main.contains(document.activeElement)) refresh();
+  const focused = document.activeElement;
+  if (!document.hidden && !detail.open && (!main.contains(focused) || focused.matches('h1'))) refresh();
 }, 30_000);
