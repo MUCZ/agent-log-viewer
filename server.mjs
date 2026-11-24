@@ -30,7 +30,10 @@ let scan;
 async function getSnapshot() {
   if (snapshot && Date.now() - scannedAt < 10_000) return snapshot;
   scan ??= loadCodex().then(result => {
-    const sessions = [...result.sessions.values()].map(item => item.summary);
+    const sessions = [...result.sessions.values()].map(({ summary, prompts }) => ({
+      ...summary,
+      promptTexts: prompts.map(prompt => prompt.text),
+    }));
     sessions.sort((a, b) => b.start - a.start);
     const data = JSON.stringify({
       today: dayKey(Date.now()),

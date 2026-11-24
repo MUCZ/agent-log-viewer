@@ -174,7 +174,7 @@ function searchQuery(mode) {
 
 function matchesSearch(entry, query) {
   return !query || [
-    entry.title, entry.preview, entry.projectName, entry.cwd, ...entry.files,
+    entry.title, entry.preview, entry.projectName, entry.cwd, ...entry.files, ...(entry.promptTexts ?? []),
   ].some(value => value.toLocaleLowerCase().includes(query));
 }
 
@@ -663,8 +663,8 @@ function render() {
   $('#view-label').textContent = viewLabel;
   document.title = `Worklog · ${viewLabel}`;
   $('#bar-icon').replaceChildren(icon(byProject ? 'folder' : 'activity'));
-  search.placeholder = byProject ? 'Search this project…' : 'Search sessions…';
-  search.setAttribute('aria-label', byProject ? 'Search sessions in this project' : 'Search sessions');
+  search.placeholder = byProject ? 'Search this project…' : 'Search sessions and prompts…';
+  search.setAttribute('aria-label', byProject ? 'Search sessions and prompts in this project' : 'Search sessions and prompts');
   const nodes = byProject ? projectView() : dateView();
   if (snapshot.unreadable) {
     nodes.push(el('p', 'read-note', `${count(snapshot.unreadable, 'log')} could not be read.`));
@@ -710,6 +710,14 @@ function resumePanel(entry) {
     status);
 }
 
+function promptDisclosure(label, text, open = false) {
+  const card = el('details', 'prompt-card',
+    el('summary', 'prompt-summary', label, icon('down')),
+    el('p', 'prompt-text', text));
+  card.open = open;
+  return card;
+}
+
 async function openDetail(entry, trigger) {
   const request = ++detailRequest;
   detailTrigger = trigger;
@@ -739,28 +747,33 @@ async function openDetail(entry, trigger) {
   }
   const prompts = el('section', 'detail-section', el('h3', '', 'User prompts',
     el('span', 'detail-count', number.format(entry.turns))));
+  const instructions = el('div', 'prompt-context');
   const promptBody = el('div', '', el('p', 'muted', 'Loading prompts…'));
   prompts.append(promptBody);
-  detailContent.replaceChildren(heading, resumePanel(entry), stats, prompts, files);
+  detailContent.replaceChildren(heading, resumePanel(entry), stats, instructions, prompts, files);
   detailContent.scrollTop = 0;
   detail.showModal();
   $('#close-detail').focus();
   try {
-    const promptDays = await Promise.all(activityDays.map(async date => {
+    const sessionDays = await Promise.all(activityDays.map(async date => {
       const params = new URLSearchParams({ day: date, id: entry.id });
       const response = await fetch(`/api/session?${params}`);
       if (!response.ok) throw new Error('Unavailable');
-      const data = await response.json();
-      return data.prompts.map(prompt => ({ ...prompt, day: date }));
+      return response.json();
     }));
     if (request !== detailRequest) return;
-    const prompts = promptDays.flat().sort((a, b) => a.time - b.time);
+    const context = sessionDays.find(session => session.instructions)?.instructions;
+    if (context?.system) instructions.append(promptDisclosure('System prompt', context.system));
+    if (context?.agents) instructions.append(promptDisclosure('AGENTS.md', context.agents));
+    const prompts = sessionDays.flatMap(({ summary, prompts }) => prompts.map(prompt => ({ ...prompt, day: summary.day })))
+      .sort((a, b) => a.time - b.time);
     promptBody.replaceChildren(prompts.length
       ? el('ol', 'prompt-list', ...prompts.map(prompt => {
         const displayTime = clock.format(prompt.time);
         const time = el('time', '', spansDays ? `${formatDay(prompt.day)} · ${displayTime}` : displayTime);
         time.dateTime = new Date(prompt.time).toISOString();
-        return el('li', '', time, el('p', '', prompt.text));
+        const preview = el('span', 'prompt-preview', prompt.text.slice(0, 180).replace(/\s+/g, ' '));
+        return el('li', '', promptDisclosure(el('span', 'prompt-label', time, preview), prompt.text, true));
       }))
       : el('p', 'muted', spansDays ? 'No user prompts recorded.' : 'No user prompts recorded for this day.'));
   } catch {

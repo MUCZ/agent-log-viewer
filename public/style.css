@@ -507,10 +507,17 @@ summary::-webkit-details-marker { display: none; }
 .file-list, .prompt-list { margin: 0; padding: 0; list-style: none; }
 .file-list li { display: flex; align-items: start; gap: 8px; padding: 5px 0; font-size: .875rem; overflow-wrap: anywhere; }
 .file-list .icon { color: var(--muted); width: 15px; height: 15px; }
-.prompt-list li { padding: 9px 12px 11px; border: 1px solid var(--line); border-radius: 8px; background: #fafafd; }
-.prompt-list li + li { margin-top: 6px; }
-.prompt-list time { display: block; color: var(--muted); font-variant-numeric: tabular-nums; font-size: .75rem; margin-bottom: 4px; }
-.prompt-list p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9375rem; line-height: 1.5; }
+.prompt-context, .prompt-list { display: grid; gap: 6px; }
+.prompt-card { min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: #fafafd; }
+.prompt-summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-radius: 8px; font-size: .875rem; }
+.prompt-summary:hover { background: #f0f2f8; }
+.prompt-summary > .icon { flex: none; color: var(--muted); }
+.prompt-card[open] > .prompt-summary .icon { transform: rotate(180deg); }
+.prompt-label { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.prompt-label time { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; font-size: .75rem; }
+.prompt-preview { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.prompt-card[open] .prompt-preview { display: none; }
+.prompt-text { padding: 0 12px 11px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9375rem; line-height: 1.5; }
 
 @media (max-width: 1130px) {
   .activity-layout { grid-template-columns: minmax(0, 1fr); }

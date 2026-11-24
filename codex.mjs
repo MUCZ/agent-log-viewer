@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 const idleGap = 10 * 60 * 1000;
 const internalSources = new Set(['subagent', 'guardian_review', 'onboarding_checklist']);
+const agentsHeader = /^# AGENTS\.md instructions[^\r\n]*\r?\n\s*<INSTRUCTIONS>\s*([\s\S]*?)\s*<\/INSTRUCTIONS>\s*/i;
 
 export function dayKey(timestamp) {
   const date = new Date(timestamp);
@@ -137,6 +138,8 @@ async function parseRollout(file, size) {
   const modernUsage = [];
   const legacyUsage = [];
   const toolCalls = new Map();
+  const systemPrompts = new Set();
+  let agentsInstructions;
   let previousPrompt;
 
   function bucketAt(time) {
@@ -152,9 +155,18 @@ async function parseRollout(file, size) {
 
   function onPrompt(time, text, source) {
     if (!text) return;
-    if (previousPrompt?.text === text && previousPrompt.source !== source && Math.abs(time - previousPrompt.time) < 3000) {
-      return;
+    const duplicate = previousPrompt && previousPrompt.source !== source && Math.abs(time - previousPrompt.time) < 3000;
+    const instructions = text.match(agentsHeader);
+    if (instructions) {
+      const message = text.slice(instructions[0].length);
+      if (!previousPrompt) {
+        agentsInstructions ??= instructions[1];
+        text = message;
+      } else if (duplicate && agentsInstructions === instructions[1] && previousPrompt.text === message) {
+        return;
+      }
     }
+    if (!text || duplicate && previousPrompt.text === text) return;
     bucketAt(time).prompts.push({ time, text });
     previousPrompt = { time, text, source };
   }
@@ -167,6 +179,8 @@ async function parseRollout(file, size) {
         if (isInternal(p.source, p.thread_source)) return null;
         meta = p;
         cwd = meta.cwd;
+        const base = plainPrompt(meta.base_instructions?.text ?? meta.base_instructions);
+        if (base) systemPrompts.add(base);
       }
       continue;
     }
@@ -190,6 +204,10 @@ async function parseRollout(file, size) {
       onPrompt(time, promptContent(item.content), 'item');
     } else if (isResponse && p.type === 'message' && p.role === 'user') {
       onPrompt(time, promptContent(p.content), 'response');
+    } else if (isResponse && p.type === 'message' && (p.role === 'system'
+      || p.role === 'developer' && !previousPrompt && !systemPrompts.size)) {
+      const text = promptContent(p.content);
+      if (text) systemPrompts.add(text);
     } else if (isEvent && (
       p.type === 'item_completed' && ['FileChange', 'fileChange', 'file_change'].includes(item?.type)
         && item.status === 'completed'
@@ -246,7 +264,7 @@ async function parseRollout(file, size) {
     }
   }
   tokenDeltas(modernUsage.length ? modernUsage : legacyUsage, buckets);
-  return { meta, buckets };
+  return { meta, buckets, instructions: { system: [...systemPrompts].join('\n\n'), agents: agentsInstructions } };
 }
 
 function summarize(meta, bucket, thread, archived) {
@@ -306,7 +324,7 @@ export function codexSource(home) {
           return null;
         });
         if (!parsed) continue;
-        const { meta, buckets } = parsed;
+        const { meta, buckets, instructions } = parsed;
         const thread = metadata.get(meta.id);
         if (isInternal(thread?.source, thread?.thread_source)) continue;
         for (const bucket of buckets.values()) {
@@ -314,7 +332,7 @@ export function codexSource(home) {
           const key = `${summary.day}/${meta.id}`;
           const existing = sessions.get(key);
           if (!existing || file.archived === false) {
-            sessions.set(key, { summary, prompts: bucket.prompts });
+            sessions.set(key, { summary, prompts: bucket.prompts, instructions });
           }
         }
       }
