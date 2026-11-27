@@ -138,11 +138,41 @@ button.pulse-cell:hover .pulse-fill, button.pulse-cell[aria-current] .pulse-fill
 .date-name { font-size: .875rem; font-weight: 620; }
 .date-description, .date-count { color: var(--nav-muted); font-size: .75rem; }
 .date-count { font-variant-numeric: tabular-nums; min-width: 18px; text-align: right; }
-.sidebar-project { grid-template-columns: 4px minmax(0, 1fr) auto; align-items: center; }
-.sidebar-project-mark { align-self: stretch; width: 4px; min-height: 15px; border-radius: 3px; background: color-mix(in srgb, var(--tone) 65%, #dce5f4); }
-.sidebar-project-label { display: grid; gap: 2px; min-width: 0; }
-.sidebar-project-label > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-project-path { font-size: .6875rem; }
+.folder-header { display: flex; align-items: center; justify-content: space-between; padding: 0 19px 8px; }
+.folder-header span { font-size: .75rem; font-variant-numeric: tabular-nums; }
+.project-list { overflow: auto; padding: 0 9px 12px; scrollbar-width: thin; scrollbar-color: #55647b transparent; }
+.project-tree, .folder-children { margin: 0; padding: 0; list-style: none; }
+.folder-children { border-inline-start: 1px solid var(--nav-line); margin-inline-start: 13px; padding-inline-start: 3px; }
+.folder-children .folder-children .folder-children { margin-inline-start: 6px; }
+.folder-item { outline: none; }
+.folder-row {
+  display: grid;
+  grid-template-columns: 20px 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px 5px 2px;
+  margin-block: 2px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.folder-row:hover { background: #222e43; }
+.folder-item[aria-selected="true"] > .folder-row { background: #273d47; border-color: #39555b; color: #e5f8f2; }
+.folder-item:focus-visible > .folder-row { outline: 2px solid var(--nav-accent); outline-offset: -2px; }
+.folder-toggle { align-self: stretch; display: grid; place-items: center; color: var(--nav-muted); border-radius: 4px; }
+.folder-toggle:not(:empty):hover { color: var(--nav-accent); background: #37475a; }
+.folder-toggle .icon { width: 12px; height: 12px; }
+.folder-icon { color: color-mix(in srgb, var(--tone) 52%, #e7effb); }
+.folder-icon .icon { width: 15px; height: 15px; }
+.folder-label { display: grid; gap: 3px; }
+.folder-name, .folder-stats { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-name { font-size: .875rem; font-weight: 620; }
+.folder-stats { color: var(--nav-muted); font-size: .6875rem; font-variant-numeric: tabular-nums; }
+.folder-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: -4px 0 15px; color: var(--muted); font-size: .8125rem; }
+.folder-scope label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.folder-scope input { margin: 0; accent-color: var(--accent); }
+.session-folder { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: .75rem; overflow-wrap: anywhere; }
+.session-folder .icon { width: 12px; height: 12px; }
 .sidebar-empty { padding: 8px; font-size: .875rem; color: var(--nav-muted); }
 .sidebar-footer {
   display: flex;
@@ -540,8 +570,8 @@ summary::-webkit-details-marker { display: none; }
   .date-item { display: flex; width: auto; min-height: 33px; padding: 6px 8px; flex: none; }
   .date-item .icon, .date-description { display: none; }
   .date-count { min-width: 0; }
-  .sidebar-project { max-width: 192px; }
-  .sidebar-project .sidebar-project-path { display: block; }
+  .folder-header { padding: 2px 15px 5px; }
+  .project-list { max-height: min(32dvh, 235px); padding: 0 12px 8px; }
   .topbar { min-height: 51px; padding-block: 7px; }
   .search { width: min(225px, 100%); }
   .content { padding-block: 20px 37px; }

@@ -1,3 +1,5 @@
+import { indexProjects, indexProjectTree, folderSessions } from './project-tree.js';
+
 const $ = selector => document.querySelector(selector);
 
 const glyphs = {
@@ -126,6 +128,10 @@ const searches = { date: '', project: '' };
 let snapshot;
 let snapshotText;
 let histories = new Map();
+let projectTree;
+const expandedFolders = new Map();
+let treeFocus;
+let includeSubfolders = true;
 let view = 'date';
 let currentProject;
 let day;
@@ -281,19 +287,9 @@ function metric(glyph, label, value, caption, title) {
   return tile;
 }
 
-function indexProjects(entries) {
-  const index = new Map();
-  for (const entry of entries) {
-    if (!index.has(entry.cwd)) {
-      index.set(entry.cwd, { cwd: entry.cwd, name: entry.projectName, lastActive: entry.end, sessions: new Map() });
-    }
-    const history = index.get(entry.cwd);
-    history.lastActive = Math.max(history.lastActive, entry.end);
-    if (!history.sessions.has(entry.id)) history.sessions.set(entry.id, []);
-    history.sessions.get(entry.id).push(entry);
-  }
-  return new Map([...index].sort(([, a], [, b]) =>
-    b.sessions.size - a.sessions.size || b.lastActive - a.lastActive || a.name.localeCompare(b.name)));
+function setProjectHistories(entries) {
+  histories = indexProjects(entries);
+  projectTree = indexProjectTree(histories);
 }
 
 function combineSession(entries) {
@@ -330,41 +326,99 @@ function parentPath(cwd) {
 }
 
 function renderProjectList() {
-  const projects = $('#project-list');
-  const { scrollTop, scrollLeft } = projects;
-  projects.replaceChildren();
-  for (const history of histories.values()) {
-    const location = parentPath(history.cwd);
-    const item = el('button', `date-item sidebar-project tone-${projectColor.get(history.cwd)}`,
-      el('span', 'sidebar-project-mark'),
-      el('span', 'sidebar-project-label', el('span', 'date-name', history.name),
-        location ? el('span', 'date-description sidebar-project-path', location) : null),
-      el('span', 'date-count', number.format(history.sessions.size)));
-    item.type = 'button';
-    item.title = history.cwd || history.name;
-    item.setAttribute('aria-label', `${item.title} · ${count(history.sessions.size, 'session')}`);
-    if (history.cwd === currentProject) item.setAttribute('aria-current', 'true');
-    item.addEventListener('click', () => {
-      if (currentProject === history.cwd) return;
-      currentProject = history.cwd;
-      search.value = searches.project = '';
-      render();
-      main.querySelector('h1')?.focus({ preventScroll: true });
-      window.scrollTo(0, 0);
-    });
-    projects.append(item);
+  const list = $('#project-list');
+  const hadFocus = list.contains(document.activeElement);
+  const initial = !list.firstElementChild;
+  const scrollTop = list.scrollTop;
+  const visible = new Map();
+  const lastActiveDate = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: zone });
+
+  function focusItem(item, focus = true) {
+    if (!item) return;
+    const previous = visible.get(treeFocus);
+    if (previous) previous.tabIndex = -1;
+    treeFocus = item.dataset.cwd;
+    item.tabIndex = 0;
+    if (focus) item.focus({ preventScroll: true });
+    if (!focus && !initial) return;
+    const bounds = list.getBoundingClientRect();
+    const row = item.firstElementChild.getBoundingClientRect();
+    if (row.top < bounds.top) list.scrollTop += row.top - bounds.top;
+    else if (row.bottom > bounds.bottom) list.scrollTop += row.bottom - bounds.bottom;
   }
-  projects.scrollTop = scrollTop;
-  projects.scrollLeft = scrollLeft;
-  const selected = projects.querySelector('[aria-current]');
-  if (selected) {
-    const item = selected.getBoundingClientRect();
-    const list = projects.getBoundingClientRect();
-    if (item.left < list.left) projects.scrollLeft += item.left - list.left;
-    if (item.right > list.right) projects.scrollLeft += item.right - list.right;
-    if (item.top < list.top) projects.scrollTop += item.top - list.top;
-    if (item.bottom > list.bottom) projects.scrollTop += item.bottom - list.bottom;
+
+  function branch(nodes, topLevel = false) {
+    const group = el('ul', topLevel ? 'project-tree' : 'folder-children');
+    group.setAttribute('role', topLevel ? 'tree' : 'group');
+    if (topLevel) group.setAttribute('aria-label', 'Project folders');
+    for (const node of nodes) {
+      const hasChildren = node.children.length > 0;
+      const expanded = expandedFolders.get(node.cwd) ?? topLevel;
+      const toggle = el('span', 'folder-toggle', hasChildren ? icon(expanded ? 'down' : 'right') : null);
+      if (hasChildren) toggle.title = expanded ? 'Collapse folder' : 'Expand folder';
+      const name = el('span', 'folder-name', node.label);
+      const stats = el('span', 'folder-stats', count(node.sessionCount, 'session'), ' · ', compact.format(node.tokens) + ' tokens');
+      const glyph = el('span', `folder-icon tone-${projectColor.get(node.cwd) ?? 'slate'}`, icon('folder'));
+      const row = el('div', 'folder-row', toggle, glyph, el('span', 'folder-label', name, stats));
+      const item = el('li', 'folder-item', row);
+      item.dataset.cwd = node.cwd;
+      item.title = `${node.cwd || node.name} · ${number.format(node.tokens)} tokens · Last active ${lastActiveDate.format(node.lastActive)}`;
+      item.setAttribute('role', 'treeitem');
+      item.setAttribute('aria-label', node.label + ', ' + stats.textContent);
+      item.setAttribute('aria-selected', String(currentProject === node.cwd));
+      item.tabIndex = -1;
+      visible.set(node.cwd, item);
+      if (hasChildren) item.setAttribute('aria-expanded', String(expanded));
+      if (hasChildren && expanded) item.append(branch(node.children));
+      function toggleBranch() {
+        treeFocus = node.cwd;
+        expandedFolders.set(node.cwd, !expanded);
+        renderProjectList();
+        list.querySelector('[tabindex="0"]')?.focus({ preventScroll: true });
+      }
+      function select() {
+        focusItem(item);
+        if (currentProject === node.cwd) return;
+        currentProject = node.cwd;
+        includeSubfolders = true;
+        render();
+        window.scrollTo(0, 0);
+      }
+      row.addEventListener('click', event => {
+        if (hasChildren && toggle.contains(event.target)) toggleBranch();
+        else select();
+      });
+      item.addEventListener('keydown', event => {
+        if (event.target !== item) return;
+        const items = [...visible.values()];
+        const index = items.indexOf(item);
+        switch (event.key) {
+          case 'ArrowUp': focusItem(items[index - 1]); break;
+          case 'ArrowDown': focusItem(items[index + 1]); break;
+          case 'Home': focusItem(items[0]); break;
+          case 'End': focusItem(items.at(-1)); break;
+          case 'ArrowRight':
+            if (hasChildren && !expanded) toggleBranch();
+            else if (hasChildren) focusItem(visible.get(node.children[0].cwd));
+            break;
+          case 'ArrowLeft':
+            if (hasChildren && expanded) toggleBranch();
+            else if (node.parent) focusItem(visible.get(node.parent.cwd));
+            break;
+          case 'Enter':
+          case ' ': select(); break;
+          default: return;
+        }
+        event.preventDefault();
+      });
+      group.append(item);
+    }
+    return group;
   }
+  list.replaceChildren(branch(projectTree.roots, true));
+  list.scrollTop = scrollTop;
+  focusItem(visible.get(treeFocus) ?? visible.get(currentProject) ?? visible.values().next().value, hadFocus);
+  $('#project-count').textContent = number.format(histories.size);
 }
 
 function projectGroups(entries) {
@@ -599,25 +653,50 @@ function dateView() {
 }
 
 function projectView() {
-  if (!histories.has(currentProject)) {
+  if (!projectTree.byPath.has(currentProject)) {
     currentProject = project && histories.has(project) ? project : histories.keys().next().value;
+    includeSubfolders = true;
+    treeFocus = currentProject;
+    for (let parent = projectTree.byPath.get(currentProject)?.parent; parent; parent = parent.parent) {
+      expandedFolders.set(parent.cwd, true);
+    }
   }
   renderProjectList();
-  const history = histories.get(currentProject);
-  if (!history) return [emptyView('folder', 'No projects yet', 'Projects will appear here after Codex records a session.')];
+  const folder = projectTree.byPath.get(currentProject);
+  if (!folder) return [emptyView('folder', 'No projects yet', 'Projects will appear here after a session records a working directory.')];
 
-  const title = el('h1', '', history.name);
+  const title = el('h1', '', folder.name);
   title.tabIndex = -1;
-  const tone = `tone-${projectColor.get(history.cwd)}`;
+  const tone = `tone-${projectColor.get(folder.cwd) ?? 'slate'}`;
   const heading = el('section', `project-page-heading ${tone}`,
     el('span', 'project-glyph', icon('folder')),
-    el('div', 'project-page-title', title, el('code', 'project-path', history.cwd || 'Working directory unavailable')),
-    ghosttyAction(history.cwd));
+    el('div', 'project-page-title', title, el('code', 'project-path', folder.cwd || 'Working directory unavailable')),
+    folder.history ? ghosttyAction(folder.cwd) : null);
 
+  const nodes = [heading];
+  const withChildren = folder.children.length > 0 && (!folder.history || includeSubfolders);
+  if (folder.children.length) {
+    const scope = el('div', 'folder-scope');
+    if (folder.history) {
+      const toggle = el('input', '');
+      toggle.type = 'checkbox';
+      toggle.checked = includeSubfolders;
+      toggle.addEventListener('change', () => {
+        includeSubfolders = toggle.checked;
+        render();
+        main.querySelector('.folder-scope input').focus({ preventScroll: true });
+      });
+      scope.append(el('label', '', toggle, 'Include subfolders'));
+    }
+    const directories = withChildren ? folder.histories.length : 1;
+    scope.append(el('span', '', number.format(directories) + (directories === 1 ? ' working directory' : ' working directories')));
+    nodes.push(scope);
+  }
   const query = searchQuery('project');
   const recent = [];
+  const sessions = folderSessions(folder, withChildren);
   let peakTokens = 0;
-  for (const slices of history.sessions.values()) {
+  for (const slices of sessions.values()) {
     const entry = combineSession(slices);
     peakTokens = Math.max(peakTokens, entry.tokens.total);
     if (slices.some(slice => matchesSearch(slice, query))) recent.push(entry);
@@ -625,8 +704,8 @@ function projectView() {
   recent.sort((a, b) => b.end - a.end);
 
   if (!recent.length) {
-    return [heading,
-      emptyView('search', 'No matching sessions', 'Try a different search in this project.', 'Clear search', () => {
+    return [...nodes,
+      emptyView('search', 'No matching sessions', 'Try a different search in this folder.', 'Clear search', () => {
         clearSearch();
         search.focus();
       })];
@@ -638,18 +717,27 @@ function projectView() {
     dates.get(entry.day).push(entry);
   }
   const activeDays = new Set(recent.flatMap(entry => entry.activityDays)).size;
-  const metrics = sessionMetrics(recent, query ? `Of ${count(history.sessions.size, 'project session')}` : `Across ${count(activeDays, 'day')}`);
+  const metrics = sessionMetrics(recent, query ? `Of ${count(sessions.size, 'session')}` : `Across ${count(activeDays, 'day')}`);
   const timeline = el('section', `timeline project-timeline ${tone}`,
-    sessionHeading('Recent sessions', peakTokens, 'in this project'));
+    sessionHeading('Recent sessions', peakTokens, 'in the selected folder scope'));
   for (const [date, entries] of dates) {
     const label = date === snapshot.today ? `Today · ${formatDay(date)}` : dayFormat.format(parseDay(date));
     const year = date.slice(0, 4) !== snapshot.today.slice(0, 4) ? `, ${date.slice(0, 4)}` : '';
     timeline.append(el('section', 'project-day',
       el('div', 'project-day-heading',
         el('h3', '', label + year), el('span', 'muted', count(entries.length, 'session'))),
-      ...entries.map(entry => sessionRow(entry, peakTokens))));
+      ...entries.map(entry => {
+        const row = sessionRow(entry, peakTokens);
+        if (withChildren) {
+          const location = entry.cwd === folder.cwd ? '.' : entry.cwd.slice(folder.cwd === '/' ? 1 : folder.cwd.length + 1);
+          const path = el('span', 'session-folder', icon('folder'), location);
+          path.title = entry.cwd;
+          row.querySelector('.session-info').append(path);
+        }
+        return row;
+      })));
   }
-  return [heading, metrics, timeline];
+  return [...nodes, metrics, timeline];
 }
 
 function render() {
@@ -663,8 +751,8 @@ function render() {
   $('#view-label').textContent = viewLabel;
   document.title = `Worklog · ${viewLabel}`;
   $('#bar-icon').replaceChildren(icon(byProject ? 'folder' : 'activity'));
-  search.placeholder = byProject ? 'Search this project…' : 'Search sessions and prompts…';
-  search.setAttribute('aria-label', byProject ? 'Search sessions and prompts in this project' : 'Search sessions and prompts');
+  search.placeholder = byProject ? 'Search this folder…' : 'Search sessions and prompts…';
+  search.setAttribute('aria-label', byProject ? 'Search sessions and prompts in this folder' : 'Search sessions and prompts');
   const nodes = byProject ? projectView() : dateView();
   if (snapshot.unreadable) {
     nodes.push(el('p', 'read-note', `${count(snapshot.unreadable, 'log')} could not be read.`));
@@ -797,7 +885,7 @@ async function refresh() {
         projectColor.set(entry.cwd, projectColors[projectColor.size % projectColors.length]);
       }
     }
-    histories = indexProjects(snapshot.sessions);
+    setProjectHistories(snapshot.sessions);
     if (!day || !previous?.sessions.length && !searchQuery('date') && !project) day = snapshot.sessions[0]?.day || snapshot.today;
     if (project && !histories.has(project)) project = '';
     render();
