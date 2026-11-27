@@ -88,13 +88,6 @@ let clock = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit
 const parseDay = day => new Date(day + 'T12:00:00');
 const formatDay = day => shortDay.format(parseDay(day));
 
-function dayOffset(day, offset) {
-  const date = parseDay(day);
-  date.setDate(date.getDate() + offset);
-  return [date.getFullYear(), date.getMonth() + 1, date.getDate()]
-    .map(value => String(value).padStart(2, '0')).join('-');
-}
-
 function duration(ms) {
   if (ms < 60_000) return ms > 0 ? '<1m' : '0m';
   const minutes = Math.round(ms / 60_000);
@@ -230,21 +223,100 @@ search.addEventListener('keydown', event => {
   if (event.key === 'Escape' && search.value) clearSearch();
 });
 
+const monthFormat = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' });
+const calendarToggle = $('#calendar-toggle');
+const calendarControls = $('#calendar-controls');
+const calendarBack = button('calendar-step', 'Previous month with activity', 'left');
+const calendarNext = button('calendar-step', 'Next month with activity', 'right');
+calendarControls.append(calendarBack, calendarNext);
+calendarToggle.append(icon('down'));
+
+function expandCalendar(expanded) {
+  calendarToggle.setAttribute('aria-expanded', String(expanded));
+  $('#calendar-body').hidden = calendarControls.hidden = !expanded;
+}
+const smallScreen = window.matchMedia('(max-width: 730px)');
+expandCalendar(!smallScreen.matches);
+smallScreen.addEventListener('change', () => expandCalendar(!smallScreen.matches));
+calendarToggle.addEventListener('click', () => expandCalendar($('#calendar-body').hidden));
+
+let calendarMonth;
+let calendarSelection;
+function renderCalendar(totals) {
+  const months = [...new Set([...totals.keys()].map(date => date.slice(0, 7)))].sort();
+  if (calendarSelection !== day || !months.includes(calendarMonth)) {
+    calendarMonth = day.slice(0, 7);
+    calendarSelection = day;
+  }
+  const first = parseDay(calendarMonth + '-01');
+  const monthName = monthFormat.format(first);
+  $('#calendar-month').textContent = monthName;
+  calendarToggle.setAttribute('aria-label', `Activity calendar for ${monthName}`);
+
+  const previousMonth = months.findLast(month => month < calendarMonth);
+  const nextMonth = months.find(month => month > calendarMonth);
+  for (const [step, next] of [[calendarBack, previousMonth], [calendarNext, nextMonth]]) {
+    step.disabled = !next;
+    step.onclick = () => {
+      calendarMonth = next;
+      renderCalendar(totals);
+      if (step.disabled) (step === calendarBack ? calendarNext : calendarBack).focus();
+    };
+  }
+
+  const grid = $('#calendar-grid');
+  grid.replaceChildren();
+  for (const label of ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']) {
+    const heading = el('span', 'calendar-weekday', label);
+    heading.setAttribute('aria-hidden', 'true');
+    grid.append(heading);
+  }
+  for (let index = 0; index < (first.getDay() + 6) % 7; index++) grid.append(el('span'));
+
+  const last = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  let activeDays = 0;
+  let tokens = 0;
+  for (let dayNumber = 1; dayNumber <= last; dayNumber++) {
+    const date = `${calendarMonth}-${String(dayNumber).padStart(2, '0')}`;
+    const data = totals.get(date);
+    const cell = el(data ? 'button' : 'span', 'calendar-day', String(dayNumber));
+    if (data) {
+      activeDays++;
+      tokens += data.tokens;
+      cell.type = 'button';
+      cell.title = data.label;
+      cell.setAttribute('aria-label', data.label);
+      if (date === day) cell.setAttribute('aria-current', 'date');
+      cell.addEventListener('click', () => chooseDay(date, true));
+    } else {
+      cell.setAttribute('aria-hidden', 'true');
+    }
+    if (date === snapshot.today) cell.classList.add('is-today');
+    grid.append(cell);
+  }
+  $('#calendar-stats').textContent = `${count(activeDays, 'active day')} · ${compact.format(tokens)} tokens`;
+}
+
 function renderDates(days) {
   const dates = $('#dates');
   const { scrollTop, scrollLeft } = dates;
+  const totals = new Map();
   dates.replaceChildren();
   for (const [date, entries] of days) {
     const today = date === snapshot.today;
     const dateText = today ? 'Today' : formatDay(date);
-    const descriptor = today ? formatDay(date) : weekday.format(parseDay(date));
-    const item = el('button', 'date-item',
-      icon('calendar'),
+    const descriptor = date.slice(0, 4) !== snapshot.today.slice(0, 4) ? date.slice(0, 4)
+      : today ? formatDay(date) : weekday.format(parseDay(date));
+    const tokens = entries.reduce((sum, entry) => sum + entry.tokens.total, 0);
+    const label = `${dayFormat.format(parseDay(date))}, ${date.slice(0, 4)} · ${count(entries.length, 'session')} · ${count(tokens, 'token')}`;
+    totals.set(date, { tokens, label });
+    const item = el('button', 'date-item history-row',
       el('span', 'date-text', el('span', 'date-name', dateText), el('span', 'date-description', descriptor)),
-      el('span', 'date-count', number.format(entries.length)));
+      el('span', 'history-sessions', number.format(entries.length)),
+      el('span', 'history-tokens', compact.format(tokens)));
     item.type = 'button';
-    item.title = `${dayFormat.format(parseDay(date))} · ${count(entries.length, 'session')}`;
-    item.setAttribute('aria-label', item.title);
+    item.title = label;
+    item.setAttribute('aria-label', label);
     if (date === day) item.setAttribute('aria-current', 'date');
     item.addEventListener('click', () => chooseDay(date, true));
     dates.append(item);
@@ -252,25 +324,7 @@ function renderDates(days) {
   if (!days.size) dates.append(el('p', 'sidebar-empty', 'No matching dates'));
   dates.scrollTop = scrollTop;
   dates.scrollLeft = scrollLeft;
-
-  const recent = Array.from({ length: 14 }, (_, index) => dayOffset(snapshot.today, index - 13));
-  const peak = Math.max(1, ...recent.map(date => days.get(date)?.length || 0));
-  const pulse = $('#pulse');
-  pulse.replaceChildren();
-  for (const date of recent) {
-    const sessions = days.get(date)?.length || 0;
-    const cell = el(sessions ? 'button' : 'span', 'pulse-cell', el('span', 'pulse-fill'));
-    cell.title = `${formatDay(date)} · ${count(sessions, 'session')}`;
-    cell.firstChild.style.height = `${sessions ? Math.max(20, sessions * 100 / peak) : 10}%`;
-    if (sessions) {
-      cell.type = 'button';
-      cell.setAttribute('aria-label', cell.title);
-      if (date === day) cell.setAttribute('aria-current', 'date');
-      cell.addEventListener('click', () => chooseDay(date, true));
-    }
-    pulse.append(cell);
-  }
-  $('#pulse-range').replaceChildren(el('span', '', formatDay(recent[0])), el('span', '', formatDay(recent[13])));
+  renderCalendar(totals);
 }
 
 function metric(glyph, label, value, caption, title) {
