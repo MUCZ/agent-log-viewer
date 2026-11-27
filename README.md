@@ -30,7 +30,7 @@ With Ghostty installed, **Open in Ghostty** opens the working directory from a p
 
 - In the date view, a session appears on each day with recorded activity in the Mac's time zone. In the project view, it appears once under its most recent activity date, with usage and details combined across days.
 - Active time adds gaps of up to ten minutes between events within each session. Parallel sessions can overlap.
-- Tokens come from the usage recorded by each agent. Codex reports cumulative totals. Claude Code and Pi report usage per assistant message. The input count includes separately reported cache reads and writes.
+- Codex token counts use per-response usage when available and cumulative counters for older logs. Continued rollouts contribute to the same session. Claude Code and Pi report usage per assistant message. Input includes separately reported cache reads and writes.
 - Session token bars use the largest session total on the selected date or in the selected project as their scale, including sessions hidden by filters.
 - Changed files come from successful patch, edit and write tools. Edits made through shell commands may be absent.
 - For Codex, Worklog also reads archived rollouts and uses the read-only SQLite index for titles and related metadata when available. Codex subagents and review threads are omitted.
