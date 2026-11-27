@@ -53,6 +53,7 @@
     <div class="workspace">
       <header class="topbar">
         <div class="breadcrumb"><span id="bar-icon"></span><span id="view-label">Daily activity</span></div>
+        <button id="open-report" class="report-entry" type="button" aria-controls="report" disabled>Daily report <span id="report-availability"></span></button>
         <select id="source" aria-label="Filter by agent">
           <option value="">All agents</option>
           <option value="codex">Codex</option>
@@ -70,10 +71,20 @@
       </main>
     </div>
   </div>
-  <dialog id="report" class="drawer report-drawer" aria-labelledby="report-title">
-    <div class="drawer-header"><span class="drawer-label">Daily report</span><button type="button" class="icon-button" id="close-report" aria-label="Close daily report"></button></div>
-    <div id="report-body" class="drawer-content"></div>
-  </dialog>
+  <main id="report" class="report-page" hidden aria-labelledby="report-title">
+    <header class="report-toolbar">
+      <button id="back-report" type="button" class="report-back">Back to activity</button>
+      <span>Worklog / Daily report</span>
+    </header>
+    <div class="report-paper">
+      <div class="report-masthead">
+        <div><p class="report-kicker">Daily report</p><h1 id="report-title" tabindex="-1"></h1><p id="report-scope"></p></div>
+        <div id="report-actions" class="report-actions"></div>
+      </div>
+      <div id="report-status" aria-live="polite"></div>
+      <div id="report-body"></div>
+    </div>
+  </main>
   <dialog id="detail" class="drawer" aria-labelledby="detail-title">
     <div class="drawer-header"><div class="drawer-label">Session details</div><button type="button" class="icon-button" id="close-detail" aria-label="Close session details"></button></div>
     <div class="drawer-content" id="detail-content"></div>

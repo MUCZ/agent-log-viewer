@@ -123,7 +123,7 @@ const server = createServer(async (request, response) => {
       if (!generate && request.method !== 'GET') return json(response, 405, { error: 'Expected GET or POST.' });
       const { sessions } = await getSnapshot();
       const entries = [...sessions.values()].filter(s => s.summary.day === day);
-      const state = generate ? await reports.start(day, entries) : await reports.status(day, entries);
+      const state = generate ? await reports.start(day, entries, url.searchParams.get('regenerate') === '1') : await reports.status(day, entries);
       return json(response, state.progress ? 202 : 200, state);
     }
     if (url.pathname === '/api/open-in-ghostty') {

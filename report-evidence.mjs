@@ -35,13 +35,29 @@ async function repoIdentity(dir) {
   } catch { return null; }
 }
 
+// Preserve observed artifact URLs without forwarding auth parameters or local viewer links.
+function artifactLinks(content) {
+  const urls = [];
+  for (const match of content.matchAll(/https?:\/\/[^\s<>"'\x60\]\uff09\uff0c\u3002\uff1b]+/giu)) {
+    try {
+      const url = new URL(match[0].replace(/[).,;:!?]+$/, ''));
+      if (url.username || url.password || url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+        || url.hostname === '[::1]' || url.href.length > 600 || /(?:token|signature|credential|key|auth|secret|password)/i.test(url.search)) continue;
+      urls.push(url.href);
+    } catch { /* An excerpt can contain an incomplete URL. */ }
+  }
+  return urls;
+}
+
 export async function reportEvidence(session, repoCache) {
   const { summary, prompts } = session;
   const messages = [];
   const seen = new Set();
+  const links = new Set();
   function add(time, role, content) {
     if (typeof content !== 'string') return;
     const text = excerpt(content, 500);
+    for (const url of artifactLinks(excerpt(content, 12000))) links.add(url);
     const key = role + '\n' + text;
     if (text && !seen.has(key)) {
       seen.add(key);
@@ -74,6 +90,7 @@ export async function reportEvidence(session, repoCache) {
   }
   return {
     cwd: excerpt(summary.cwd, 220), repositories: repos, edits: files.map(f => excerpt(f, 180)),
+    links: sample([...links], 24),
     events: sample(messages, 16).map(({ role, text }) => [role, text]),
   };
 }

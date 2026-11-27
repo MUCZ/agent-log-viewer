@@ -135,18 +135,68 @@ let day;
 let savedDay;
 let detailRequest = 0;
 let detailTrigger;
-const reportDialog = $('#report');
-const reportBody = $('#report-body');
-let reportRequest = 0;
+const reportPage = $('#report');
+const reportButton = $('#open-report');
+let activeReportDay;
 let reportTimer;
-$('#close-report').append(icon('close'));
-$('#close-report').addEventListener('click', () => reportDialog.close());
-reportDialog.addEventListener('close', () => {
+let reportRequest = 0;
+let availabilityDay;
+let availabilityAt = 0;
+let reportState;
+let returnScroll = 0;
+let reportHistoryEntry = false;
+reportButton.prepend(icon('list'));
+reportButton.addEventListener('click', () => {
+  returnScroll = window.scrollY;
+  reportHistoryEntry = true;
+  location.hash = 'report/' + (view === 'project' ? snapshot.today : day);
+});
+$('#back-report').prepend(icon('left'));
+$('#back-report').addEventListener('click', () => {
+  if (reportHistoryEntry) history.back();
+  else {
+    history.replaceState(null, '', location.pathname + location.search);
+    showReportRoute();
+  }
+});
+window.addEventListener('hashchange', showReportRoute);
+
+function showReportRoute() {
+  if (!snapshot) return;
+  const date = location.hash.match(/^#report\/(\d{4}-\d{2}-\d{2})$/)?.[1];
   reportRequest++;
   clearTimeout(reportTimer);
-  reportTimer = null;
-  main.querySelector('.report-entry')?.focus({ preventScroll: true });
-});
+  activeReportDay = date;
+  reportPage.hidden = !date;
+  $('.shell').hidden = Boolean(date);
+  if (date) {
+    reportState = null;
+    $('#report-title').textContent = dayFormat.format(parseDay(date));
+    $('#report-scope').textContent = zone + ' · All projects and agents';
+    $('#report-title').focus({ preventScroll: true });
+    document.title = 'Daily report · ' + date;
+    window.scrollTo(0, 0);
+    paintReport({ progress: { phase: 'Opening report' } });
+    loadReport(date);
+  } else {
+    reportHistoryEntry = false;
+    availabilityDay = null;
+    render();
+    window.scrollTo(0, returnScroll);
+    reportButton.focus({ preventScroll: true });
+  }
+}
+
+function updateAvailability(date) {
+  if (availabilityDay === date && Date.now() - availabilityAt < 15000) return;
+  const label = $('#report-availability');
+  if (availabilityDay !== date) label.textContent = '';
+  availabilityDay = date;
+  availabilityAt = Date.now();
+  fetch('/api/daily-report?day=' + date).then(r => r.ok ? r.json() : null).then(state => {
+    if (availabilityDay === date && state) label.textContent = state.progress ? 'In progress' : state.report ? 'Saved' : 'Not generated';
+  }).catch(() => { if (availabilityDay === date) availabilityDay = null; });
+}
 const collapsed = new Set();
 
 $('#search-icon').append(icon('search'));
@@ -173,7 +223,7 @@ detail.addEventListener('close', () => {
 });
 
 document.addEventListener('keydown', event => {
-  if (detail.open || reportDialog.open) return;
+  if (detail.open || activeReportDay) return;
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault();
     search.focus();
@@ -642,77 +692,137 @@ function groupCard(group, peakTokens) {
   return card;
 }
 
-function dailyReportButton() {
-  const control = el('button', 'report-entry', icon('list'), 'Daily report', icon('right'));
-  control.type = 'button';
-  control.addEventListener('click', () => {
-    reportBody.replaceChildren();
-    reportDialog.showModal();
-    $('#close-report').focus();
-    loadReport(day);
-  });
-  return control;
+function bulletParts(bullet) {
+  if (typeof bullet === 'string') return { text: bullet, links: [] };
+  return { text: bullet.text, links: (bullet.links ?? []).filter(url => /^https?:\/\//i.test(url)) };
 }
 
-async function loadReport(date, generate = false) {
+function linkLabel(href) {
+  const url = new URL(href);
+  const github = url.hostname === 'github.com' && url.pathname.match(/^\/[^/]+\/([^/]+)\/(pull|issues|commit)\/([^/]+)/);
+  if (github) {
+    const kind = { pull: 'PR #', issues: 'Issue #', commit: 'Commit ' }[github[2]];
+    const target = url.hash.startsWith('#discussion') ? ' · Comment' : url.hash.startsWith('#pullrequestreview') ? ' · Review'
+      : /\/(changes|files)\/?$/.test(url.pathname) ? ' · Files' : '';
+    return github[1] + ' · ' + kind + github[3].slice(0, 12) + target;
+  }
+  return url.hostname + (url.pathname === '/' ? '' : url.pathname);
+}
+
+function reportProgress(job) {
+  const card = el('section', 'report-notice working');
+  const stages = ['Reading activity', 'Analyzing sessions', 'Writing report'];
+  const stage = stages.indexOf(job.phase);
+  const amount = stage === 0 ? job.read : job.analyzed;
+  const status = stage >= 0 ? 'Step ' + (stage + 1) + ' of 3' : 'Please wait';
+  const measure = stage === 0 || stage === 1 ? amount + ' / ' + job.total + ' sessions' : '';
+  card.append(el('div', 'report-progress-line', el('span', 'spinner'), el('strong', '', job.phase + '…'), el('span', 'report-count', measure || status)));
+  if (stage >= 0) {
+    const steps = el('ol', 'report-steps');
+    for (const [i, name] of ['Read activity', 'Analyze tasks', 'Write report'].entries()) {
+      const item = el('li', i < stage ? 'done' : i === stage ? 'current' : '', name);
+      if (i === stage) item.setAttribute('aria-current', 'step');
+      steps.append(item);
+    }
+    const bar = el('progress', 'report-progress-bar');
+    bar.setAttribute('aria-label', job.phase);
+    bar.max = Math.max(1, job.total);
+    if (stage < 2) bar.value = Math.min(bar.max, amount);
+    card.append(bar, steps);
+  }
+  return card;
+}
+
+function paintReport(state) {
+  const { report, total, progress, stale, error } = state;
+  const status = $('#report-status');
+  const body = $('#report-body');
+  const actions = $('#report-actions');
+  const date = activeReportDay;
+  actions.replaceChildren();
+  status.replaceChildren();
+  if (progress) status.append(reportProgress(progress));
+  if (error) status.append(el('p', 'report-error', error));
+  const pending = Boolean(progress);
+  if (total) {
+    const run = el('button', 'report-run', pending ? 'Generating…' : report ? 'Regenerate report' : 'Generate report');
+    run.disabled = pending;
+    run.addEventListener('click', () => loadReport(date, report ? 'regenerate' : 'generate'));
+    actions.append(run);
+  }
+  body.replaceChildren();
+  if (!report) {
+    if (!pending && total != null) body.append(el('section', 'report-placeholder',
+      icon('list'), el('h2', '', total ? 'No report generated yet' : 'No sessions on this date'),
+      total ? el('p', '', count(total, 'session') + ' available to summarize by project.') : null));
+    return;
+  }
+  const partial = report.analyzed / report.total < 0.9;
+  const saved = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: zone }).format(new Date(report.generated));
+  const coverage = report.analyzed + ' of ' + report.total + ' sessions analyzed';
+  body.append(el('div', 'report-byline', el('span', 'report-saved', partial ? 'Partial report' : 'Saved report'),
+    el('span', '', 'Generated ' + saved), el('span', '', coverage),
+    stale && !pending ? el('span', 'report-changed', 'Update available') : null));
+  const copy = el('button', 'report-copy', icon('copy'), 'Copy Markdown');
+  copy.addEventListener('click', async () => {
+    const groups = report.projects.map(p => '## ' + p.name + '\n' + p.bullets.map(raw => {
+      const b = bulletParts(raw);
+      return '- ' + b.text + b.links.map(url => ' [' + linkLabel(url) + '](<' + url + '>)').join('');
+    }).join('\n'));
+    try {
+      await navigator.clipboard.writeText(['# ' + date, (partial ? 'Partial report · ' : '') + coverage, ...groups].join('\n\n'));
+      copy.textContent = 'Copied';
+    } catch { copy.textContent = 'Copy unavailable'; }
+  });
+  actions.prepend(copy);
+  for (const project of report.projects) {
+    const list = el('ul', '');
+    for (const raw of project.bullets) {
+      const bullet = bulletParts(raw);
+      const item = el('li', '', bullet.text);
+      if (bullet.links.length) {
+        const links = el('div', 'report-links');
+        for (const url of bullet.links) {
+          const link = el('a', '', linkLabel(url));
+          link.href = url;
+          link.title = url;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          links.append(link);
+        }
+        item.append(links);
+      }
+      list.append(item);
+    }
+    body.append(el('section', 'report-project', el('h2', '', project.name), list));
+  }
+  if (!report.projects.length) body.append(el('p', 'report-byline', 'No substantive tasks recorded.'));
+  const { input, output, cost } = report.usage;
+  body.append(el('footer', 'report-byline', report.model.split('/').pop() + ' · ' + number.format(input) + ' in · ' + number.format(output) + ' out · $' + cost.toFixed(4)));
+}
+
+async function loadReport(date, action) {
   const request = ++reportRequest;
   clearTimeout(reportTimer);
-  const heading = el('h2', '', dayFormat.format(parseDay(date)));
-  heading.id = 'report-title';
-  const scope = el('p', 'report-scope', zone + ' · All projects and agents');
-  if (!reportBody.querySelector('h2')) reportBody.replaceChildren(heading, scope);
+  if (action) paintReport({ ...reportState, error: null, progress: { phase: 'Starting generation' } });
   try {
-    const response = await fetch('/api/daily-report?day=' + encodeURIComponent(date), { method: generate ? 'POST' : 'GET' });
-    if (!response.ok) throw new Error('Could not load this report.');
-    const { report, total, stale, progress, error } = await response.json();
-    if (request !== reportRequest || !reportDialog.open) return;
-    const content = [heading, scope];
-    const actions = el('div', 'report-actions');
-    let coverage;
-    if (report) {
-      const partial = report.analyzed / report.total < 0.9;
-      coverage = (partial ? 'Partial report · ' : '') + report.analyzed + ' of ' + report.total + ' sessions analyzed';
-      content.push(el('p', 'report-meta', coverage));
-      for (const project of report.projects) {
-        content.push(el('section', 'report-project', el('h3', '', project.name),
-          el('ul', '', ...project.bullets.map(line => el('li', '', line)))));
-      }
-      if (!report.projects.length) content.push(el('p', '', 'No substantive tasks recorded.'));
-      const copy = el('button', 'plain-button', 'Copy Markdown');
-      copy.addEventListener('click', async () => {
-        const groups = report.projects.map(p => '## ' + p.name + '\n' + p.bullets.map(b => '- ' + b).join('\n'));
-        try {
-          await navigator.clipboard.writeText(['# ' + date, coverage, ...groups].join('\n\n'));
-          copy.textContent = 'Copied';
-        } catch { copy.textContent = 'Copy unavailable'; }
-      });
-      actions.append(copy);
-      const { input, output, cost } = report.usage;
-      content.push(el('p', 'report-meta', 'Last generation · ' + number.format(input) + ' in · ' + number.format(output)
-        + ' out · $' + cost.toFixed(4)));
-    } else if (total) {
-      content.push(el('p', 'report-intro', 'Generate a project-by-project summary from selected conversation excerpts and recorded edits using Gemini 4 Hydrogen on OpenRouter.'));
-    } else content.push(el('p', 'report-intro', 'No sessions recorded for this date.'));
-    if (error) content.push(el('p', 'report-error', error));
-    if (progress) {
-      const status = el('p', 'report-meta', progress.phase + ' · ' + progress.analyzed + ' / ' + progress.total);
-      status.setAttribute('role', 'status');
-      content.push(status);
-      reportTimer = setTimeout(() => loadReport(date), 1500);
-    } else if (total && (stale || !report)) {
-      const run = el('button', 'plain-button', report ? 'Update report' : 'Generate report');
-      run.addEventListener('click', () => {
-        run.disabled = true;
-        loadReport(date, true);
-      });
-      actions.append(run);
-    }
-    reportBody.replaceChildren(...content, actions);
+    const url = '/api/daily-report?day=' + date + (action === 'regenerate' ? '&regenerate=1' : '');
+    const response = await fetch(url, { method: action ? 'POST' : 'GET' });
+    if (!response.ok) throw new Error();
+    const state = await response.json();
+    if (request !== reportRequest || activeReportDay !== date) return;
+    if (reportState?.progress && state.progress && state.report?.generated === reportState.report?.generated) {
+      if (JSON.stringify(state.progress) !== JSON.stringify(reportState.progress))
+        $('#report-status').replaceChildren(reportProgress(state.progress));
+    } else paintReport(state);
+    reportState = state;
+    if (state.progress) reportTimer = setTimeout(() => loadReport(date), 1200);
   } catch {
     if (request !== reportRequest) return;
-    const retry = el('button', 'plain-button', 'Retry');
+    paintReport({ ...reportState, progress: null, error: 'Could not load the latest report status.' });
+    const retry = el('button', 'report-copy', 'Reload status');
     retry.addEventListener('click', () => loadReport(date));
-    reportBody.append(el('p', 'report-error', 'Could not load this report.'), retry);
+    $('#report-status').append(retry);
   }
 }
 
@@ -779,11 +889,10 @@ function dateView() {
     const timeline = el('section', 'timeline',
       el('h2', 'timeline-heading', 'Sessions'),
       ...cards);
-    const rail = el('aside', 'activity-rail', harnessDistribution(entries), projectIndex(groups, cards), dailyReportButton());
+    const rail = el('aside', 'activity-rail', harnessDistribution(entries), projectIndex(groups, cards));
     rail.setAttribute('aria-label', 'Daily overview');
     nodes.push(el('div', 'activity-layout', timeline, rail));
   } else {
-    nodes.push(dailyReportButton());
     nodes.push(searchQuery('date')
       ? emptyView('search', 'No matching sessions', 'Try a different search.', 'Clear search', () => {
         clearSearch();
@@ -892,6 +1001,9 @@ function projectView() {
 
 function render() {
   const byProject = view === 'project';
+  reportButton.disabled = false;
+  updateAvailability(byProject ? snapshot.today : day);
+  reportButton.title = byProject ? 'Open today’s daily report' : 'Open the daily report for ' + day;
   for (const control of viewButtons) {
     control.setAttribute('aria-pressed', String(control.dataset.view === view));
   }
@@ -1054,7 +1166,11 @@ async function refresh() {
 }
 
 await refresh();
+if (location.hash.startsWith('#report/')) showReportRoute();
 setInterval(() => {
   const focused = document.activeElement;
-  if (!document.hidden && !detail.open && !reportDialog.open && (!main.contains(focused) || focused.matches('h1'))) refresh();
+  if (!document.hidden && !detail.open && !activeReportDay) {
+    if (snapshot) updateAvailability(view === 'project' ? snapshot.today : day);
+    if (!main.contains(focused) || focused.matches('h1')) refresh();
+  }
 }, 30_000);

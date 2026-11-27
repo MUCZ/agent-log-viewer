@@ -8,9 +8,9 @@ The primary reader is the engineer returning to yesterday's work. In about 30 se
 
 ## Reading experience
 
-In **By date**, replace the existing **Daily summary** disclosure with a **Daily report** action in the same right-hand rail. Selecting it opens a wide desktop drawer. Keeping the selected date and scroll position makes it easy to return to the session list. The report belongs to the entire local calendar day. Its header shows the date, time zone and “All projects and agents” even when a search or harness filter is active. Keep the entry accessible when filters hide all sessions on an otherwise active day.
+Place **Daily report** beside the view name in the sticky desktop toolbar. In **By date** it opens the selected day. In **By project** it opens today. Selecting it opens a dedicated reading page with a dated URL. Keeping the selected date and scroll position makes it easy to return to the session list. The report belongs to the entire local calendar day. Its header shows the date, time zone and “All projects and agents” even when a search or harness filter is active. Keep the entry accessible when filters hide all sessions on an otherwise active day.
 
-On first use, select **Generate report** in the drawer. Show progress as sessions analyzed out of the day's total. Once saved, opening the drawer goes straight to the report. If new activity arrives, keep the previous version readable and offer **Update report**. A failed update preserves the saved version. A day with zero sessions gets a short empty state.
+On first use, select **Generate report** on the page. Show progress as sessions analyzed out of the day's total. Once saved, opening the page goes straight to the report. Show the saved timestamp and allow regeneration even when activity is unchanged. Keep the saved report readable while processing. A failed update preserves the saved version. A day with zero sessions gets a short empty state.
 
 ## What a report looks like
 
@@ -32,7 +32,7 @@ Illustrative English rendering. The proposed default report language is Chinese 
 >
 > Open question: should the fix also cover resumed sessions?
 
-Give each project with substantive work a heading and typically one to three short bullets. Lead with the change, finding or decision. Include an open question only when someone raised it and the day's record leaves it open. Omit greetings and setup chatter. The drawer and **Copy Markdown** both present a standalone report in the same order. Session identifiers, footnotes and links are omitted from both.
+Give each project with substantive work a heading and typically one to three short bullets. Lead with the change, finding or decision. Include an open question only when someone raised it and the day's record leaves it open. Omit greetings and setup chatter. The reading page and **Copy Markdown** both present a standalone report in the same order. Each bullet can link to the observed PR, issue or document that makes its outcome concrete. Both formats omit session references.
 
 ## How projects are discovered
 
@@ -78,4 +78,4 @@ The current index exposes prompts, titles, usage and file paths. Generation also
 
 ## First-release review
 
-Use the mixed-day examples above as acceptance cases. Have the engineer independently list the expected projects and main outcomes for one real day, then compare that list with the report. Look specifically for one project split across worktrees, unrelated projects merged by name, and a second task lost inside a mixed session. Check one overnight session and one unreadable session for date attribution and coverage. Verify the drawer and copied Markdown both make sense on their own, and that every claimed completion has supporting evidence in the underlying logs.
+Use the mixed-day examples above as acceptance cases. Have the engineer independently list the expected projects and main outcomes for one real day, then compare that list with the report. Look specifically for one project split across worktrees, unrelated projects merged by name, and a second task lost inside a mixed session. Check one overnight session and one unreadable session for date attribution and coverage. Verify the reading page and copied Markdown both make sense on their own, and that every claimed completion has supporting evidence in the underlying logs.
