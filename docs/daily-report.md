@@ -8,7 +8,7 @@ The primary reader is the engineer returning to yesterday's work. In about 30 se
 
 ## Reading experience
 
-Place **Daily report** beside the view name in the sticky desktop toolbar. In **By date** it opens the selected day. In **By project** it opens today. Selecting it opens a dedicated reading page with a dated URL. Keeping the selected date and scroll position makes it easy to return to the session list. The report belongs to the entire local calendar day. Its header shows the date, time zone and “All projects and agents” even when a search or harness filter is active. Keep the entry accessible when filters hide all sessions on an otherwise active day.
+The report is the second tab of the day page in **By date**, beside **Activity**, with a dated URL. The sidebar, date heading and day stepper stay in place, so moving between days or back to the session list takes one action. The history list marks days with a saved report. The report belongs to the entire local calendar day. Its header shows the date, time zone and “All projects and agents” even when a search or harness filter is active. Keep the entry accessible when filters hide all sessions on an otherwise active day.
 
 On first use, select **Generate report** on the page. Show progress as sessions analyzed out of the day's total. Once saved, opening the page goes straight to the report. Show the saved timestamp and allow regeneration even when activity is unchanged. Keep the saved report readable while processing. A failed update preserves the saved version. A day with zero sessions gets a short empty state.
 
@@ -32,7 +32,19 @@ Illustrative English rendering. The proposed default report language is Chinese 
 >
 > Open question: should the fix also cover resumed sessions?
 
-Give each project with substantive work a heading and typically one to three short bullets. Lead with the change, finding or decision. Include an open question only when someone raised it and the day's record leaves it open. Omit greetings and setup chatter. The reading page and **Copy Markdown** both present a standalone report in the same order. Each bullet can link to the observed PR, issue or document that makes its outcome concrete. Both formats omit session references.
+Open with a one-line headline and counts of done, in-progress and blocked items. Give each project with substantive work a heading, a one-sentence summary and short items. Each item leads with a verb-first headline naming the artifact, adds at most one sentence of detail, and carries a type and a status:
+
+| Type | Covers |
+| --- | --- |
+| Feature | New or extended capability or UI |
+| Fix | Repairing a bug or regression |
+| Review | Reviewing code, PRs or feedback, replying to reviewers |
+| QA | Testing, verifying, reproducing, benchmarking |
+| Research | Investigating, analysing, designing, planning, writing proposals or docs |
+| Maintenance | Refactoring, configuration, dependencies, CI, releases, environment, cleanup |
+| Other | Anything else |
+
+Status is **done** only when the logs show completion, **in progress** when work started but was not finished or verified, and **blocked** when a failure or blocker was left unresolved. The reader can filter by type and group by project or by type. Open questions and next steps recorded in the logs appear under **Follow-ups**. Omit greetings and setup chatter. The reading page and **Copy Markdown** both present a standalone report in the same order. Each bullet can link to the observed PR, issue or document that makes its outcome concrete. Both formats omit session references.
 
 ## How projects are discovered
 
@@ -40,12 +52,12 @@ A project is a recognizable body of work, such as Worklog or Ponsu. Each heading
 
 ### Report generation
 
-Call OpenRouter directly on demand using Gemini 4 Hydrogen. A report creates no harness session. Use ordinary code for dates, repository identity and counts. Give the model two bounded jobs: interpreting a conversation and comparing the resulting work across the day.
+Call OpenRouter directly using Gemini 4 Hydrogen. A report creates no harness session. Use ordinary code for dates, repository identity, grouping, counts, links and coverage. Give the model two bounded jobs: interpreting sessions and writing the day.
 
-1. **Collect the day's evidence.** For each session, collect the day's user requests, substantive replies, observed edits and tool outcomes. Where available, attach the repository of the files actually worked on, its normalized remote identity, and the repository owning a linked PR or issue. A Git common directory can identify sibling worktrees locally. Treat current checkout metadata as a hint when reconstructing older activity.
-2. **Extract work from each session independently.** Produce one or more short records containing the task, observed outcome or open question, candidate project and facts supporting that association. Split when the user moves to a different deliverable or project. A mention made for comparison does not create another record. Each record retains its originating evidence internally for validation.
-3. **Cluster the records across all three harnesses.** Start with strong associations such as edits in worktrees of the same repository or an explicit review request naming a repository's PR. Use the clustering request to resolve generic directories, alternate names and work without a repository using the task and its deliverable. Combine different repositories under a named initiative only when the records explicitly establish that shared project. A folder basename, timestamp, generic keyword or bare issue number is insufficient on its own. Put substantive work with an unresolved owner under **Other work**; avoid inventing a project name.
-4. **Write and check the report.** Within each project, consolidate records that describe the same task and retain distinct deliverables as separate bullets. Emit each piece of work once. Check the project assignment and outcome wording against its supporting records before rendering. Discard unsupported claims and count failed analyses in the coverage indicator.
+1. **Collect the day's evidence.** For each session, pair each user request with the agent's final reply in that turn, which usually states what was done. Add the session title, successful edits, and the outcome of commits (with their message), pushes, PR actions and checks such as test runs, across Codex, Claude Code and Pi. Attach the repository of the files actually worked on and its normalized remote identity. A Git common directory can identify sibling worktrees locally.
+2. **Extract typed work records from each session.** Produce one record per deliverable with a headline, one line of detail, type, status, project, owner-qualified repository, any explicitly recorded open question, and supporting links copied from that session. Split when the user moves to a different deliverable or project. A mention made for comparison does not create another record. Sessions are processed in small parallel batches. A failed batch is retried session by session, so one bad session counts against coverage instead of failing the report.
+3. **Group in code, then write.** Group records sharing a canonical repository, comparing case-insensitively. The writer turns each repository group into exactly one project, places records without a repository only when the evidence matches, and puts the rest under **Other work**. It merges records about the same deliverable into one item and cites the record ids behind every item and follow-up.
+4. **Check against the records.** Drop items and follow-ups without a valid source. Downgrade a claimed **done** when none of its records is done. Attach only links observed in the cited sessions. Add back any record or open question the writer left out, so no work goes missing. Count unreadable sessions and failed analyses in the coverage indicator.
 
 ### Example from a mixed day
 
@@ -73,7 +85,8 @@ The current index exposes prompts, titles, usage and file paths. Generation also
 - Start with every indexed Codex, Claude and Pi session active on the selected day, using the dashboard's time zone. For a session spanning midnight, use that day's activity. A result recorded after midnight belongs to the following report.
 - Count a session as analyzed once its day-specific evidence has been read and assessed. A successfully assessed greeting counts. An unreadable session or failed analysis does not. Attempt all sessions, including short ones.
 - Show the actual coverage count. At least 90% coverage meets the existing project target. If any sessions are missing, identify them and offer a retry. Below 90%, label the result **Partial report**, including in copied Markdown.
-- Store the report and internal assessments locally, separately from source logs. Reopening a saved report makes no model call. On update, reuse assessments for unchanged sessions and reconsider the day’s clusters, since new evidence can identify previously unassigned work. Keep generation on demand in the first release.
+- Store the report and internal assessments locally, separately from source logs. Reopening a saved report makes no model call. On update, reuse assessments for unchanged sessions and reconsider the day’s clusters, since new evidence can identify previously unassigned work. Session records are keyed by the day's summary and prompts only, so a session that continues on a later day does not make an earlier report stale.
+- Generate on demand and nightly. After 00:30 the background server generates the previous day's report, catching up to three days after sleep or downtime. It covers days with activity and no report, and refreshes once a report saved before its day ended that has since changed. `WORKLOG_NIGHTLY_REPORTS=off` disables it and `WORKLOG_NIGHTLY_REPORT_TIME` changes the time.
 - OpenRouter receives bounded excerpts and project hints during explicit generation. Store the input tokens, output tokens, request count and cost returned by the API for each successful generation. Browsing sessions and reopening reports run locally.
 
 ## First-release review

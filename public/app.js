@@ -21,6 +21,15 @@ const glyphs = {
   sun: ['M12 3v2m0 14v2M5.6 5.6 7 7m10 10 1.4 1.4M3 12h2m14 0h2M5.6 18.4 7 17M17 7l1.4-1.4', 'M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z'],
   moon: ['M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z'],
   auto: ['M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z', 'M12 3v18a9 9 0 0 0 0-18Z'],
+  sparkle: ['M12 3.5 13.7 9 19 10.5 13.7 12 12 17.5 10.3 12 5 10.5 10.3 9Z', 'M18.5 16v4M16.5 18h4'],
+  wrench: ['M14.5 6.5a4 4 0 0 0-5.3 5.3L4.5 16.5a1.8 1.8 0 0 0 2.5 2.5l4.7-4.7a4 4 0 0 0 5.3-5.3l-2.4 2.4-2.3-.6-.6-2.3Z'],
+  eye: ['M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z', 'M14.5 12a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0Z'],
+  flask: ['M9.5 3.5h5M10.5 3.5v5.5L5.3 17.8A1.8 1.8 0 0 0 6.9 20.5h10.2a1.8 1.8 0 0 0 1.6-2.7L13.5 9V3.5', 'M7.8 14.5h8.4'],
+  bulb: ['M9.5 18h5M10.5 21h3', 'M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.2h5c0-.9.4-1.7 1.1-2.2A6 6 0 0 0 12 3Z'],
+  sliders: ['M4 7h9M17 7h3M4 17h3M11 17h9', 'M15 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM9 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z'],
+  dot: ['M12 12h.01', 'M19 12a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z'],
+  check: ['m5.5 12.5 4 4 9-9'],
+  alert: ['M12 7.5v5.5', 'M12 16.5h.01'],
   link: ['M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1', 'M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1'],
 };
 
@@ -154,6 +163,14 @@ let reportState;
 let reportStateDay;
 let reportLoadedAt = 0;
 const availability = new Map();
+let savedReports = {};
+
+async function loadSavedReports() {
+  try {
+    const response = await fetch('/api/daily-reports');
+    if (response.ok) savedReports = (await response.json()).days ?? {};
+  } catch { /* Markers are optional. */ }
+}
 
 function stopReport() {
   reportRequest++;
@@ -206,6 +223,11 @@ function paintAvailability() {
 
 function rememberAvailability(date, state) {
   availability.set(date, { at: Date.now(), state: { progress: Boolean(state.progress), report: Boolean(state.report) } });
+  if (state.report && savedReports[date]?.generated !== state.report.generated) {
+    savedReports[date] = { generated: state.report.generated, trigger: state.report.trigger ?? 'manual' };
+    const marker = document.querySelector(`.date-item[data-day="${date}"] .date-report`);
+    if (marker) marker.hidden = false;
+  }
   if (date === day) paintAvailability();
 }
 
@@ -451,13 +473,17 @@ function renderDates(days) {
     const descriptor = date.slice(0, 4) !== snapshot.today.slice(0, 4) ? date.slice(0, 4)
       : today ? formatDay(date) : weekday.format(parseDay(date));
     const tokens = entries.reduce((sum, entry) => sum + entry.tokens.total, 0);
-    const label = `${dayFormat.format(parseDay(date))}, ${date.slice(0, 4)} · ${count(entries.length, 'session')} · ${count(tokens, 'token')}`;
+    const label = `${dayFormat.format(parseDay(date))}, ${date.slice(0, 4)} · ${count(entries.length, 'session')} · ${count(tokens, 'token')}${savedReports[date] ? ' · Report saved' : ''}`;
     totals.set(date, { tokens, label });
+    const marker = el('span', 'date-report', icon('list'));
+    marker.title = 'Daily report saved';
+    marker.hidden = !savedReports[date];
     const item = el('button', 'date-item history-row',
-      el('span', 'date-text', el('span', 'date-name', dateText), el('span', 'date-description', descriptor)),
+      el('span', 'date-text', el('span', 'date-name', dateText), el('span', 'date-description', descriptor), marker),
       el('span', 'history-sessions', number.format(entries.length)),
       el('span', 'history-tokens', compact.format(tokens)));
     item.type = 'button';
+    item.dataset.day = date;
     item.title = label;
     item.setAttribute('aria-label', label);
     if (date === day) item.setAttribute('aria-current', 'date');
@@ -913,7 +939,12 @@ function linkLabel(href) {
     const ref = /^[0-9a-f]{12,}$/i.test(source[2]) ? source[2].slice(0, 7) : source[2];
     return source[1] + ' · ' + file + ' @ ' + ref;
   }
-  return url.hostname + (url.pathname === '/' ? '' : url.pathname);
+  const segments = url.pathname.split('/').filter(Boolean);
+  const host = url.hostname.replace(/^www\./, '');
+  if (!segments.length) return host;
+  const tail = decodeURIComponent(segments.at(-1));
+  const label = segments.length > 1 ? host + ' · ' + tail : host + '/' + tail;
+  return label.length > 56 ? label.slice(0, 55) + '…' : label;
 }
 
 function reportProgress(job) {
@@ -940,50 +971,200 @@ function reportProgress(job) {
   return card;
 }
 
-function reportTone(name) {
+const kindInfo = {
+  feature: { label: 'Feature', zh: '功能', glyph: 'sparkle' },
+  fix: { label: 'Fix', zh: '修复', glyph: 'wrench' },
+  review: { label: 'Review', zh: '评审', glyph: 'eye' },
+  qa: { label: 'QA', zh: '测试', glyph: 'flask' },
+  research: { label: 'Research', zh: '调研', glyph: 'bulb' },
+  maintenance: { label: 'Maintenance', zh: '维护', glyph: 'sliders' },
+  other: { label: 'Other', zh: '其他', glyph: 'dot' },
+};
+const statusInfo = { done: { label: 'Done', zh: '' }, in_progress: { label: 'In progress', zh: '进行中' }, blocked: { label: 'Blocked', zh: '受阻' } };
+const reportPrefs = { filter: 'all', group: 'project' };
+try { reportPrefs.group = localStorage.getItem('worklog-report-group') === 'kind' ? 'kind' : 'project'; } catch {}
+
+// Reports saved before typed items existed render as plain items.
+function normalizeReport(report) {
+  if (report.version >= 3) return report;
+  return { ...report, legacy: true, headline: '', followUps: [], projects: (report.projects ?? []).map(project => {
+    const parts = project.name.split('/').filter(Boolean);
+    return { name: parts.at(-1) ?? project.name, repository: parts.length > 1 ? project.name : '', summary: '',
+      items: project.bullets.map(raw => ({ kind: 'other', status: null, title: bulletParts(raw).text, detail: '', links: bulletParts(raw).links })) };
+  }) };
+}
+
+function reportTone(project) {
   const key = value => value?.toLocaleLowerCase().replace(/[-_\s]+/g, '-');
-  const tail = key(name.split('/').filter(Boolean).pop());
-  const match = allSessions.find(entry => entry.day === reportStateDay && key(entry.projectName) === tail);
+  const names = new Set([project.name, project.repository?.split('/').pop()].filter(Boolean).map(key));
+  const match = allSessions.find(entry => entry.day === reportStateDay && names.has(key(entry.projectName)));
   return match ? projectColor.get(match.cwd) : null;
 }
 
 function reportMarkdown(report, date, coverage, partial) {
-  const groups = report.projects.map(p => '## ' + p.name + '\n' + p.bullets.map(raw => {
-    const b = bulletParts(raw);
-    return '- ' + b.text + b.links.map(url => ' [' + linkLabel(url) + '](<' + url + '>)').join('');
-  }).join('\n'));
-  return ['# ' + date, (partial ? 'Partial report · ' : '') + coverage, ...groups].join('\n\n');
+  const line = item => '- 【' + kindInfo[item.kind].zh + '】' + item.title + (item.detail ? '：' + item.detail : '')
+    + (statusInfo[item.status]?.zh ? '（' + statusInfo[item.status].zh + '）' : '')
+    + item.links.map(url => ' [' + linkLabel(url) + '](<' + url + '>)').join('');
+  const parts = ['# ' + date + ' 日报'];
+  if (report.headline) parts.push('> ' + report.headline);
+  if (partial) parts.push('Partial report · ' + coverage);
+  for (const project of report.projects) {
+    const intro = [project.repository && '`' + project.repository + '`', project.summary].filter(Boolean).join(' — ');
+    parts.push('## ' + project.name + (intro ? '\n' + intro : '') + '\n' + project.items.map(line).join('\n'));
+  }
+  if (report.followUps.length) parts.push('## 待跟进\n' + report.followUps.map(f => '- ' + (f.project ? f.project + '：' : '') + f.text).join('\n'));
+  return parts.join('\n\n');
 }
 
-function reportProjectCard(project) {
-  const tone = reportTone(project.name);
-  const parts = project.name.split('/').filter(Boolean);
-  const name = parts.length > 1 ? parts.at(-1) : project.name;
-  const location = parts.length > 1 ? parts.slice(0, -1).join('/') : null;
-  const list = el('ul', '');
-  for (const raw of project.bullets) {
-    const bullet = bulletParts(raw);
-    const item = el('li', '', bullet.text);
-    if (bullet.links.length) {
-      const links = el('div', 'report-links');
-      for (const url of bullet.links) {
-        const link = el('a', '', icon(/github\.com\/[^/]+\/[^/]+\/(?:blob|tree)\//.test(url) ? 'file' : 'link'), linkLabel(url));
-        link.href = url;
-        link.title = url;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        links.append(link);
-      }
-      item.append(links);
-    }
-    list.append(item);
+function linkChips(links) {
+  if (!links.length) return null;
+  const list = el('div', 'report-links');
+  for (const url of links) {
+    const link = el('a', '', icon(/github\.com\/[^/]+\/[^/]+\/(?:blob|tree)\//.test(url) ? 'file' : 'link'), linkLabel(url));
+    link.href = url;
+    link.title = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    list.append(link);
   }
-  const heading = el('header', 'project-heading',
-    el('span', 'project-glyph', icon('folder')),
-    el('span', 'project-label', el('strong', '', name), location ? el('code', 'project-path', location) : null),
-    el('span', 'section-count', count(project.bullets.length, 'item')));
-  heading.tabIndex = -1;
-  return el('section', `report-project project-card${tone ? ' tone-' + tone : ''}`, heading, list);
+  return list;
+}
+
+function statusMark(status) {
+  const info = statusInfo[status];
+  if (!info) return el('span', 'item-status is-none');
+  const mark = el('span', `item-status is-${status}`, status === 'done' ? icon('check') : status === 'blocked' ? icon('alert') : null);
+  mark.title = info.label;
+  mark.setAttribute('role', 'img');
+  mark.setAttribute('aria-label', info.label);
+  return mark;
+}
+
+function kindChip(kind) {
+  const info = kindInfo[kind] ?? kindInfo.other;
+  return el('span', `kind-chip kind-${kind}`, icon(info.glyph), info.label);
+}
+
+function reportItem(item, context) {
+  const tag = context.project
+    ? el('span', `item-project tone-${context.project.tone ?? 'none'}`, el('span', 'tl-dot'), context.project.name)
+    : item.status === null ? null : kindChip(item.kind);
+  return el('li', `report-item is-${item.status ?? 'none'}`, statusMark(item.status),
+    el('div', 'report-item-body',
+      el('div', 'report-item-title', el('span', '', item.title), tag),
+      item.detail ? el('p', 'report-item-detail', item.detail) : null,
+      linkChips(item.links)));
+}
+
+function reportGroups(report) {
+  const filter = reportPrefs.filter;
+  const keep = item => filter === 'all' || item.kind === filter;
+  const projects = report.projects.map(project => ({ ...project, tone: reportTone(project) }));
+  const cards = [];
+  if (reportPrefs.group === 'kind' && !report.legacy) {
+    for (const kind of Object.keys(kindInfo)) {
+      const entries = projects.flatMap(project => project.items.filter(item => item.kind === kind && keep(item)).map(item => ({ item, project })));
+      if (!entries.length) continue;
+      const card = el('section', 'report-project project-card',
+        el('header', 'project-heading',
+          el('span', `project-glyph kind-glyph kind-${kind}`, icon(kindInfo[kind].glyph)),
+          el('span', 'project-label', el('strong', '', kindInfo[kind].label)),
+          el('span', 'section-count', count(entries.length, 'item'))),
+        el('ul', 'report-items', ...entries.map(({ item, project }) => reportItem(item, { project }))));
+      cards.push(card);
+    }
+  } else {
+    for (const project of projects) {
+      const items = project.items.filter(keep);
+      if (!items.length) continue;
+      const heading = el('header', 'project-heading',
+        el('span', 'project-glyph', icon('folder')),
+        el('span', 'project-label', el('strong', '', project.name), project.repository ? el('code', 'project-path', project.repository) : null),
+        el('span', 'section-count', count(items.length, 'item')));
+      heading.tabIndex = -1;
+      const card = el('section', `report-project project-card${project.tone ? ' tone-' + project.tone : ''}`, heading,
+        project.summary ? el('p', 'report-project-summary', project.summary) : null,
+        el('ul', 'report-items', ...items.map(item => reportItem(item, {}))));
+      card.dataset.project = project.name;
+      cards.push(card);
+    }
+  }
+  cards.forEach((card, index) => card.style.setProperty('--i', index));
+  return cards;
+}
+
+function paintReportGroups(report) {
+  const groups = document.getElementById('report-groups');
+  if (!groups) return;
+  const cards = reportGroups(report);
+  groups.replaceChildren(...cards);
+  if (!cards.length) groups.append(el('section', 'empty', el('span', 'empty-icon', icon('list')),
+    el('h2', '', report.projects.length ? 'No items of this type' : 'Nothing to report'),
+    el('p', '', report.projects.length ? 'Choose another type to see more of the day.' : 'No substantive tasks were recorded on this day.')));
+  for (const chip of document.querySelectorAll('.kind-filter button')) chip.setAttribute('aria-pressed', String(chip.dataset.kind === reportPrefs.filter));
+  for (const option of document.querySelectorAll('.group-toggle button')) option.setAttribute('aria-pressed', String(option.dataset.group === reportPrefs.group));
+  const index = document.getElementById('report-index');
+  if (index) index.hidden = reportPrefs.group !== 'project' || !report.projects.length;
+}
+
+function reportOverview(report, pending) {
+  const items = report.projects.flatMap(project => project.items);
+  const tally = key => items.filter(item => item.status === key).length;
+  const stats = el('div', 'report-stats',
+    el('span', '', el('strong', '', number.format(report.projects.length)), report.projects.length === 1 ? ' project' : ' projects'),
+    el('span', '', el('strong', '', number.format(items.length)), items.length === 1 ? ' item' : ' items'));
+  if (!report.legacy) {
+    for (const status of Object.keys(statusInfo)) {
+      if (tally(status)) stats.append(el('span', `report-stat is-${status}`, statusMark(status), el('strong', '', number.format(tally(status))), ' ' + statusInfo[status].label.toLowerCase()));
+    }
+  }
+  const card = el('section', 'report-overview');
+  if (report.headline) card.append(el('p', 'report-headline', report.headline));
+  const summaryRow = el('div', 'report-summary-row', stats);
+  card.append(summaryRow);
+  if (!report.legacy && items.length) {
+    const kindsPresent = Object.keys(kindInfo).filter(kind => items.some(item => item.kind === kind));
+    if (!kindsPresent.includes(reportPrefs.filter)) reportPrefs.filter = 'all';
+    const filter = el('div', 'kind-filter');
+    filter.setAttribute('role', 'group');
+    filter.setAttribute('aria-label', 'Filter by type');
+    for (const kind of ['all', ...kindsPresent]) {
+      const chip = el('button', '', kind === 'all' ? null : icon(kindInfo[kind].glyph), kind === 'all' ? 'All' : kindInfo[kind].label,
+        el('span', 'chip-count', number.format(kind === 'all' ? items.length : items.filter(item => item.kind === kind).length)));
+      chip.type = 'button';
+      chip.dataset.kind = kind;
+      chip.addEventListener('click', () => {
+        reportPrefs.filter = kind;
+        paintReportGroups(report);
+      });
+      filter.append(chip);
+    }
+    const toggle = el('div', 'group-toggle');
+    toggle.setAttribute('role', 'group');
+    toggle.setAttribute('aria-label', 'Group items');
+    for (const [group, label, glyph] of [['project', 'Projects', 'folder'], ['kind', 'Types', 'layers']]) {
+      const option = el('button', '', icon(glyph), label);
+      option.type = 'button';
+      option.dataset.group = group;
+      option.addEventListener('click', () => {
+        reportPrefs.group = group;
+        try { localStorage.setItem('worklog-report-group', group); } catch {}
+        paintReportGroups(report);
+      });
+      toggle.append(option);
+    }
+    summaryRow.append(toggle);
+    card.append(el('div', 'report-toolbar', filter));
+  }
+  if (report.legacy && !pending) card.append(el('p', 'report-legacy', 'Saved in an earlier format. Regenerate to add types, statuses and follow-ups.'));
+  return card;
+}
+
+function nightlyNote(nightly) {
+  if (!nightly) return null;
+  return el('p', 'report-nightly', icon('moon'), nightly.enabled
+    ? `Nightly: the previous day is generated automatically after ${nightly.at}.`
+    : 'Nightly generation is off.');
 }
 
 function paintReport(state) {
@@ -992,7 +1173,9 @@ function paintReport(state) {
   const body = $('#report-body');
   const meta = $('#report-meta');
   const index = $('#report-index');
-  const { report, total, progress, stale, error } = state;
+  const followCard = $('#report-follow');
+  const { total, progress, stale, error, nightly } = state;
+  const report = state.report && normalizeReport(state.report);
   const date = activeReportDay;
   const pending = Boolean(progress);
   const runButton = label => {
@@ -1015,11 +1198,14 @@ function paintReport(state) {
   meta.replaceChildren();
   index.replaceChildren();
   index.hidden = true;
+  followCard.replaceChildren();
+  followCard.hidden = true;
 
   if (!report) {
     meta.append(
       el('div', 'report-status-line', el('span', 'report-saved is-none', pending ? 'Generating' : total == null ? 'Checking…' : 'Not generated')),
-      el('p', 'report-about', 'Summarizes the whole local day across projects and agents. Generating sends short excerpts to OpenRouter; opening a saved report does not.'));
+      el('p', 'report-about', 'Summarizes the whole local day across projects and agents. Generating sends short excerpts to OpenRouter; opening a saved report does not.'),
+      nightlyNote(nightly));
     if (!pending && total != null) {
       body.append(el('section', 'empty report-empty',
         el('span', 'empty-icon', icon('list')),
@@ -1038,48 +1224,64 @@ function paintReport(state) {
   copy.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(reportMarkdown(report, date, coverage, partial));
-      copy.replaceChildren(icon('copy'), 'Copied');
+      copy.replaceChildren(icon('check'), 'Copied');
     } catch { copy.replaceChildren(icon('copy'), 'Copy unavailable'); }
+    setTimeout(() => copy.replaceChildren(icon('copy'), 'Copy Markdown'), 1800);
   });
   const fact = (term, value) => el('div', '', el('dt', '', term), el('dd', '', value));
   const { input, output, cost } = report.usage;
   meta.append(
     el('div', 'report-status-line',
       el('span', partial ? 'report-saved is-partial' : 'report-saved', partial ? 'Partial report' : 'Saved'),
+      report.trigger === 'nightly' ? el('span', 'report-trigger', icon('moon'), 'Nightly') : null,
       stale && !pending ? el('span', 'report-changed', 'Update available') : null),
     el('dl', 'report-facts',
       fact('Generated', saved),
-      fact('Coverage', `${report.analyzed} of ${count(report.total, 'session')}`),
-      fact('Projects', number.format(report.projects.length))),
+      fact('Coverage', `${report.analyzed} of ${count(report.total, 'session')}`)),
     el('div', 'report-actions', copy, runButton('Regenerate')),
+    nightlyNote(nightly),
     el('p', 'report-cost', report.model.split('/').pop() + ' · ' + compact.format(input) + ' in · ' + compact.format(output) + ' out · $' + cost.toFixed(4)));
 
-  const cards = report.projects.map(reportProjectCard);
-  body.append(...cards);
-  if (!cards.length) body.append(el('section', 'empty', el('span', 'empty-icon', icon('list')), el('h2', '', 'Nothing to report'), el('p', '', 'No substantive tasks were recorded on this day.')));
-  if (cards.length) {
+  const groups = el('div', 'report-groups');
+  groups.id = 'report-groups';
+  body.append(reportOverview(report, pending), groups);
+
+  if (report.followUps.length) {
+    followCard.append(el('div', 'project-index-header',
+      el('div', 'project-index-heading', el('h2', '', 'Follow-ups'), el('span', 'section-count', number.format(report.followUps.length))),
+      el('p', 'project-index-caption', 'Open questions and next steps left in the logs')),
+    el('ul', 'follow-list', ...report.followUps.map(item => el('li', '', el('span', 'follow-mark'),
+      el('div', '', el('p', '', item.text), item.project ? el('span', 'follow-project', item.project) : null)))));
+    followCard.hidden = false;
+  }
+
+  if (report.projects.length) {
     const jumps = el('ul', 'project-index-list');
-    for (const [position, project] of report.projects.entries()) {
-      const card = cards[position];
-      const tone = [...card.classList].find(name => name.startsWith('tone-')) ?? '';
-      const jump = el('button', `project-jump ${tone}`,
+    for (const project of report.projects) {
+      const tone = reportTone(project);
+      const jump = el('button', `project-jump${tone ? ' tone-' + tone : ''}`,
         el('span', 'project-jump-mark'),
-        el('span', 'project-jump-label', el('strong', '', card.querySelector('strong').textContent),
-          card.querySelector('.project-path') ? el('span', 'project-jump-path', card.querySelector('.project-path').textContent) : null),
-        el('span', 'project-share', number.format(project.bullets.length)));
+        el('span', 'project-jump-label', el('strong', '', project.name), project.repository ? el('span', 'project-jump-path', project.repository) : null),
+        el('span', 'project-share', number.format(project.items.length)));
       jump.type = 'button';
-      jump.title = project.name;
+      jump.title = project.repository || project.name;
       jump.addEventListener('click', () => {
+        if (reportPrefs.filter !== 'all') {
+          reportPrefs.filter = 'all';
+          paintReportGroups(report);
+        }
+        const card = [...document.querySelectorAll('#report-groups .report-project')].find(node => node.dataset.project === project.name);
+        if (!card) return;
         card.querySelector('.project-heading').focus({ preventScroll: true });
         card.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
       });
       jumps.append(el('li', '', jump));
     }
     index.append(el('div', 'project-index-header',
-      el('div', 'project-index-heading', el('h2', '', 'Projects'), el('span', 'section-count', number.format(cards.length))),
+      el('div', 'project-index-heading', el('h2', '', 'Projects'), el('span', 'section-count', number.format(report.projects.length))),
       el('p', 'project-index-caption', 'Items per project')), jumps);
-    index.hidden = false;
   }
+  paintReportGroups(report);
 }
 
 async function loadReport(date, action) {
@@ -1113,6 +1315,7 @@ function showReport(date) {
     stopReport();
     reportState = null;
     reportStateDay = date;
+    reportPrefs.filter = 'all';
     paintReport({ progress: { phase: 'Opening report' } });
     loadReport(date);
     return;
@@ -1132,11 +1335,14 @@ function reportView() {
   const index = el('section', 'project-index');
   index.id = 'report-index';
   index.hidden = true;
+  const follow = el('section', 'project-index report-follow');
+  follow.id = 'report-follow';
+  follow.hidden = true;
   const summary = el('section', 'project-index',
     el('div', 'project-index-header', el('div', 'project-index-heading', el('h2', '', 'Daily report')),
       el('p', 'project-index-caption', `${zone.replaceAll('_', ' ')} · All projects and agents`)),
     meta);
-  const rail = el('aside', 'activity-rail', summary, index);
+  const rail = el('aside', 'activity-rail', summary, follow, index);
   rail.setAttribute('aria-label', 'Report details');
   return el('div', 'activity-layout report-layout', el('section', 'report-main', status, body), rail);
 }
@@ -1516,8 +1722,9 @@ async function refresh() {
   }
 }
 
-await refresh();
+await Promise.all([refresh(), loadSavedReports()]);
 if (location.hash.startsWith('#report/')) showReportRoute();
+else render();
 setInterval(() => {
   const focused = document.activeElement;
   if (!document.hidden && !detail.open && !activeReportDay) {

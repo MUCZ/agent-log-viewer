@@ -35,7 +35,7 @@ Use Node.js 22.13 or newer. Stop any copy of Worklog started with `npm start` so
   plutil -insert ThrottleInterval -integer 5 "$worklog_stage"
   plutil -insert EnvironmentVariables -dictionary "$worklog_stage"
   plutil -insert EnvironmentVariables.PORT -string "3737" "$worklog_stage"
-  for worklog_key in CODEX_HOME CLAUDE_CONFIG_DIR PI_CODING_AGENT_DIR PI_CODING_AGENT_SESSION_DIR WORKLOG_OPENROUTER_KEY_FILE; do
+  for worklog_key in CODEX_HOME CLAUDE_CONFIG_DIR PI_CODING_AGENT_DIR PI_CODING_AGENT_SESSION_DIR WORKLOG_OPENROUTER_KEY_FILE WORKLOG_REPORT_DIR WORKLOG_NIGHTLY_REPORTS WORKLOG_NIGHTLY_REPORT_TIME; do
     if worklog_value="$(printenv "$worklog_key")" && [ -n "$worklog_value" ]; then
       plutil -insert "EnvironmentVariables.$worklog_key" -string "$worklog_value" "$worklog_stage"
     fi
@@ -49,6 +49,8 @@ Use Node.js 22.13 or newer. Stop any copy of Worklog started with `npm start` so
 ```
 
 Open [Worklog](http://127.0.0.1:3737). The agent uses absolute paths to Node.js and the checkout. Reinstall the agent if either path changes.
+
+The background service also generates each previous day's report after 00:30 when an OpenRouter key is configured. See [Daily reports](README.md#daily-reports).
 
 ## Check or restart
 

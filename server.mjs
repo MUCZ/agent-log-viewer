@@ -5,11 +5,18 @@ import { isAbsolute } from 'node:path';
 import { promisify } from 'node:util';
 import { sessionHistory } from './agent-sessions.mjs';
 import { dailyReports } from './daily-report.mjs';
+import { nightlyReports } from './nightly-reports.mjs';
 import { dayKey } from './session-log.mjs';
 
 const port = Number(process.env.PORT || 3737);
 const loadHistory = sessionHistory();
-const reports = dailyReports();
+const reports = dailyReports(process.env.WORKLOG_REPORT_DIR ? { directory: process.env.WORKLOG_REPORT_DIR } : {});
+const nightly = nightlyReports({
+  reports,
+  sessionsForDay: async day => [...(await getSnapshot()).sessions.values()].filter(s => s.summary.day === day),
+  enabled: !/^(0|off|false|no)$/i.test(process.env.WORKLOG_NIGHTLY_REPORTS ?? ''),
+  at: process.env.WORKLOG_NIGHTLY_REPORT_TIME,
+});
 const run = promisify(execFile);
 const files = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -125,7 +132,11 @@ const server = createServer(async (request, response) => {
       const { sessions } = await getSnapshot();
       const entries = [...sessions.values()].filter(s => s.summary.day === day);
       const state = generate ? await reports.start(day, entries, url.searchParams.get('regenerate') === '1') : await reports.status(day, entries);
-      return json(response, state.progress ? 202 : 200, state);
+      return json(response, state.progress ? 202 : 200, { ...state, nightly: nightly.describe() });
+    }
+    if (url.pathname === '/api/daily-reports') {
+      if (request.method !== 'GET') return json(response, 405, { error: 'Only GET is supported.' });
+      return json(response, 200, { days: await reports.list(), nightly: nightly.describe() });
     }
     if (url.pathname === '/api/open-in-ghostty') {
       if (request.method !== 'POST') return json(response, 405, { error: 'Only POST is supported.' });
@@ -158,4 +169,7 @@ server.on('error', error => {
   process.exitCode = 1;
 });
 
-server.listen(port, '127.0.0.1', () => console.log(`Worklog is available at http://127.0.0.1:${port}`));
+server.listen(port, '127.0.0.1', () => {
+  console.log(`Worklog is available at http://127.0.0.1:${port}`);
+  nightly.start();
+});
