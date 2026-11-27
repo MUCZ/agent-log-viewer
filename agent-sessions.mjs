@@ -1,7 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { codexSource } from './codex.mjs';
+import { codexSource, parseRollout } from './codex.mjs';
 import { cachedLogs, filePaths, milliseconds, promptExcerpt, readJSONL, sessionActivity, summarize } from './session-log.mjs';
 
 function textContent(content) {
@@ -60,7 +60,7 @@ function piTitle(meta, buckets) {
   return meta.cwd ? `Session in ${basename(meta.cwd) || meta.cwd}` : 'Untitled session';
 }
 
-async function parsePi({ path }, size) {
+async function parsePi({ path }, size, observe) {
   let meta;
   let model;
   let system;
@@ -100,6 +100,7 @@ async function parsePi({ path }, size) {
     }
     if (entry.type !== 'message' || !message) continue;
     if (!['user', 'assistant', 'toolResult', 'bashExecution'].includes(message.role)) continue;
+    observe?.(time, message);
     const bucket = activity.record(time);
     if (message.role === 'assistant') {
       if (typeof message.model === 'string') model = message.model;
@@ -138,7 +139,7 @@ function claudePrompt(record) {
   return text.match(/^<bash-input>([\s\S]*?)<\/bash-input>/)?.[1] ?? text;
 }
 
-async function parseClaude({ path }, size) {
+async function parseClaude({ path }, size, observe) {
   const activity = sessionActivity();
   const pending = new Map();
   const requests = new Map();
@@ -170,6 +171,7 @@ async function parseClaude({ path }, size) {
     if (record.uuid) seen.add(record.uuid);
     if (typeof record.cwd === 'string' && record.cwd) meta.cwd ||= record.cwd;
     const message = record.message;
+    observe?.(time, message);
     const blocks = Array.isArray(message.content) ? message.content : [];
     if (record.type === 'user') {
       const text = claudePrompt(record);
@@ -246,11 +248,11 @@ function transcriptSource(directory, source, parse) {
       const id = parsed.meta.id;
       const previous = transcripts.get(id);
       if (!previous || info.mtimeMs > previous.mtime || (info.mtimeMs === previous.mtime && file.path < previous.path)) {
-        transcripts.set(id, { parsed, path: file.path, mtime: info.mtimeMs });
+        transcripts.set(id, { parsed, path: file.path, mtime: info.mtimeMs, size: info.size });
       }
     });
     const sessions = new Map();
-    for (const { parsed: { meta, buckets, instructions }, path } of transcripts.values()) {
+    for (const { parsed: { meta, buckets, instructions }, path, size, mtime } of transcripts.values()) {
       if (!meta.title) {
         const first = [...buckets.values()].find(bucket => bucket.prompts.length)?.prompts[0];
         if (first) meta.title = promptExcerpt(first.text).preview;
@@ -258,7 +260,8 @@ function transcriptSource(directory, source, parse) {
       for (const bucket of buckets.values()) {
         const summary = summarize(meta, bucket);
         if (source === 'pi') summary.sessionFile = path;
-        sessions.set(`${summary.day}/${meta.id}`, { summary, prompts: bucket.prompts, instructions });
+        sessions.set(`${summary.day}/${meta.id}`, { summary, prompts: bucket.prompts, instructions,
+          transcripts: [{ path, size, mtime }] });
       }
     }
     return { unreadable: found.unreadable + unreadable, sessions };
@@ -293,4 +296,11 @@ export function sessionHistory(env = process.env) {
     }
     return { sessions, unreadable };
   };
+}
+
+export async function readReportTranscript(session, observe) {
+  const parse = { codex: parseRollout, claude: parseClaude, pi: parsePi }[session.summary.source];
+  for (const file of session.transcripts) {
+    if (!await parse(file, file.size, observe)) throw new Error('Session transcript unavailable.');
+  }
 }

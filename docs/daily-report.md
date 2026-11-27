@@ -38,13 +38,13 @@ Give each project with substantive work a heading and typically one to three sho
 
 A project is a recognizable body of work, such as Worklog or Ponsu. Each heading answers “what was I working on?” and the bullets under it answer “what happened there?” The same project can span several worktrees, checkouts, harnesses and tasks. An explicitly named research effort can also be a project without a repository. Prefer the most specific project name supported by the actual work. A broad product name shared by several independently maintained repositories is weak evidence for merging them.
 
-### Proposed agent workflow
+### Report generation
 
-Run a single reporting workflow on demand. Use ordinary code for dates, repository identity and counts. Give the model two bounded jobs: interpreting a conversation and comparing the resulting work across the day.
+Call OpenRouter directly on demand using Gemini 4 Hydrogen. A report creates no harness session. Use ordinary code for dates, repository identity and counts. Give the model two bounded jobs: interpreting a conversation and comparing the resulting work across the day.
 
 1. **Collect the day's evidence.** For each session, collect the day's user requests, substantive replies, observed edits and tool outcomes. Where available, attach the repository of the files actually worked on, its normalized remote identity, and the repository owning a linked PR or issue. A Git common directory can identify sibling worktrees locally. Treat current checkout metadata as a hint when reconstructing older activity.
 2. **Extract work from each session independently.** Produce one or more short records containing the task, observed outcome or open question, candidate project and facts supporting that association. Split when the user moves to a different deliverable or project. A mention made for comparison does not create another record. Each record retains its originating evidence internally for validation.
-3. **Cluster the records across all three harnesses.** Start with strong associations such as edits in worktrees of the same repository or an explicit review request naming a repository's PR. Let the agent resolve generic directories, alternate names and work without a repository using the task and its deliverable. Combine different repositories under a named initiative only when the records explicitly establish that shared project. A folder basename, timestamp, generic keyword or bare issue number is insufficient on its own. Put substantive work with an unresolved owner under **Other work**; avoid inventing a project name.
+3. **Cluster the records across all three harnesses.** Start with strong associations such as edits in worktrees of the same repository or an explicit review request naming a repository's PR. Use the clustering request to resolve generic directories, alternate names and work without a repository using the task and its deliverable. Combine different repositories under a named initiative only when the records explicitly establish that shared project. A folder basename, timestamp, generic keyword or bare issue number is insufficient on its own. Put substantive work with an unresolved owner under **Other work**; avoid inventing a project name.
 4. **Write and check the report.** Within each project, consolidate records that describe the same task and retain distinct deliverables as separate bullets. Emit each piece of work once. Check the project assignment and outcome wording against its supporting records before rendering. Discard unsupported claims and count failed analyses in the coverage indicator.
 
 ### Example from a mixed day
@@ -74,7 +74,7 @@ The current index exposes prompts, titles, usage and file paths. Generation also
 - Count a session as analyzed once its day-specific evidence has been read and assessed. A successfully assessed greeting counts. An unreadable session or failed analysis does not. Attempt all sessions, including short ones.
 - Show the actual coverage count. At least 90% coverage meets the existing project target. If any sessions are missing, identify them and offer a retry. Below 90%, label the result **Partial report**, including in copied Markdown.
 - Store the report and internal assessments locally, separately from source logs. Reopening a saved report makes no model call. On update, reuse assessments for unchanged sessions and reconsider the day’s clusters, since new evidence can identify previously unassigned work. Keep generation on demand in the first release.
-- The model provider is an open implementation decision. A local model fits Worklog's current data boundary. A hosted option would need explicit setup and a clear account of which conversation excerpts leave the machine.
+- OpenRouter receives bounded excerpts and project hints during explicit generation. Store the input tokens, output tokens, request count and cost returned by the API for each successful generation. Browsing sessions and reopening reports run locally.
 
 ## First-release review
 

@@ -135,7 +135,18 @@ let day;
 let savedDay;
 let detailRequest = 0;
 let detailTrigger;
-let briefOpen = false;
+const reportDialog = $('#report');
+const reportBody = $('#report-body');
+let reportRequest = 0;
+let reportTimer;
+$('#close-report').append(icon('close'));
+$('#close-report').addEventListener('click', () => reportDialog.close());
+reportDialog.addEventListener('close', () => {
+  reportRequest++;
+  clearTimeout(reportTimer);
+  reportTimer = null;
+  main.querySelector('.report-entry')?.focus({ preventScroll: true });
+});
 const collapsed = new Set();
 
 $('#search-icon').append(icon('search'));
@@ -162,7 +173,7 @@ detail.addEventListener('close', () => {
 });
 
 document.addEventListener('keydown', event => {
-  if (detail.open) return;
+  if (detail.open || reportDialog.open) return;
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault();
     search.focus();
@@ -631,17 +642,78 @@ function groupCard(group, peakTokens) {
   return card;
 }
 
-function dailySummary(groups) {
-  const section = el('details', 'daily-summary');
-  section.open = briefOpen;
-  section.addEventListener('toggle', () => { briefOpen = section.open; });
-  section.append(el('summary', 'summary-heading',
-    el('span', 'summary-icon', icon('list')), el('span', '', 'Daily summary'), icon('down')));
-  const entries = groups.map(group => el('div', 'summary-group',
-    el('strong', '', group.name), el('span', 'muted', ` · ${count(group.sessions.length, 'session')} · ${compact.format(group.tokens)} tokens`),
-    el('ul', '', ...group.sessions.map(entry => el('li', '', entry.title)))));
-  section.append(el('div', 'summary-body', ...entries));
-  return section;
+function dailyReportButton() {
+  const control = el('button', 'report-entry', icon('list'), 'Daily report', icon('right'));
+  control.type = 'button';
+  control.addEventListener('click', () => {
+    reportBody.replaceChildren();
+    reportDialog.showModal();
+    $('#close-report').focus();
+    loadReport(day);
+  });
+  return control;
+}
+
+async function loadReport(date, generate = false) {
+  const request = ++reportRequest;
+  clearTimeout(reportTimer);
+  const heading = el('h2', '', dayFormat.format(parseDay(date)));
+  heading.id = 'report-title';
+  const scope = el('p', 'report-scope', zone + ' · All projects and agents');
+  if (!reportBody.querySelector('h2')) reportBody.replaceChildren(heading, scope);
+  try {
+    const response = await fetch('/api/daily-report?day=' + encodeURIComponent(date), { method: generate ? 'POST' : 'GET' });
+    if (!response.ok) throw new Error('Could not load this report.');
+    const { report, total, stale, progress, error } = await response.json();
+    if (request !== reportRequest || !reportDialog.open) return;
+    const content = [heading, scope];
+    const actions = el('div', 'report-actions');
+    let coverage;
+    if (report) {
+      const partial = report.analyzed / report.total < 0.9;
+      coverage = (partial ? 'Partial report · ' : '') + report.analyzed + ' of ' + report.total + ' sessions analyzed';
+      content.push(el('p', 'report-meta', coverage));
+      for (const project of report.projects) {
+        content.push(el('section', 'report-project', el('h3', '', project.name),
+          el('ul', '', ...project.bullets.map(line => el('li', '', line)))));
+      }
+      if (!report.projects.length) content.push(el('p', '', 'No substantive tasks recorded.'));
+      const copy = el('button', 'plain-button', 'Copy Markdown');
+      copy.addEventListener('click', async () => {
+        const groups = report.projects.map(p => '## ' + p.name + '\n' + p.bullets.map(b => '- ' + b).join('\n'));
+        try {
+          await navigator.clipboard.writeText(['# ' + date, coverage, ...groups].join('\n\n'));
+          copy.textContent = 'Copied';
+        } catch { copy.textContent = 'Copy unavailable'; }
+      });
+      actions.append(copy);
+      const { input, output, cost } = report.usage;
+      content.push(el('p', 'report-meta', 'Last generation · ' + number.format(input) + ' in · ' + number.format(output)
+        + ' out · $' + cost.toFixed(4)));
+    } else if (total) {
+      content.push(el('p', 'report-intro', 'Generate a project-by-project summary from selected conversation excerpts and recorded edits using Gemini 4 Hydrogen on OpenRouter.'));
+    } else content.push(el('p', 'report-intro', 'No sessions recorded for this date.'));
+    if (error) content.push(el('p', 'report-error', error));
+    if (progress) {
+      const status = el('p', 'report-meta', progress.phase + ' · ' + progress.analyzed + ' / ' + progress.total);
+      status.setAttribute('role', 'status');
+      content.push(status);
+      reportTimer = setTimeout(() => loadReport(date), 1500);
+    } else if (total && (stale || !report)) {
+      const run = el('button', 'plain-button', report ? 'Update report' : 'Generate report');
+      run.addEventListener('click', () => {
+        run.disabled = true;
+        loadReport(date, true);
+      });
+      actions.append(run);
+    }
+    reportBody.replaceChildren(...content, actions);
+  } catch {
+    if (request !== reportRequest) return;
+    const retry = el('button', 'plain-button', 'Retry');
+    retry.addEventListener('click', () => loadReport(date));
+    reportBody.append(el('p', 'report-error', 'Could not load this report.'), retry);
+  }
 }
 
 function sessionMetrics(entries, caption, includeActiveTime = false) {
@@ -707,10 +779,11 @@ function dateView() {
     const timeline = el('section', 'timeline',
       el('h2', 'timeline-heading', 'Sessions'),
       ...cards);
-    const rail = el('aside', 'activity-rail', harnessDistribution(entries), projectIndex(groups, cards), dailySummary(groups));
+    const rail = el('aside', 'activity-rail', harnessDistribution(entries), projectIndex(groups, cards), dailyReportButton());
     rail.setAttribute('aria-label', 'Daily overview');
     nodes.push(el('div', 'activity-layout', timeline, rail));
   } else {
+    nodes.push(dailyReportButton());
     nodes.push(searchQuery('date')
       ? emptyView('search', 'No matching sessions', 'Try a different search.', 'Clear search', () => {
         clearSearch();
@@ -983,5 +1056,5 @@ async function refresh() {
 await refresh();
 setInterval(() => {
   const focused = document.activeElement;
-  if (!document.hidden && !detail.open && (!main.contains(focused) || focused.matches('h1'))) refresh();
+  if (!document.hidden && !detail.open && !reportDialog.open && (!main.contains(focused) || focused.matches('h1'))) refresh();
 }, 30_000);

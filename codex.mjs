@@ -92,7 +92,7 @@ function tokenDeltas(records, buckets) {
   }
 }
 
-async function parseRollout(file, size) {
+export async function parseRollout(file, size, observe) {
   let meta;
   let cwd;
   let lastModel;
@@ -140,6 +140,7 @@ async function parseRollout(file, size) {
     const time = milliseconds(record.timestamp);
     if (!Number.isFinite(time)) continue;
 
+    observe?.(time, p);
     const item = p.item;
     const isEvent = record.type === 'event_msg';
     const isResponse = record.type === 'response_item';
@@ -236,7 +237,7 @@ function assemblePages(pages, thread) {
   for (const bucket of activity.buckets.values()) bucket.prompts.sort((a, b) => a.time - b.time);
   activity.finish();
   tokenDeltas(usage.sort((a, b) => a.time - b.time), activity.buckets);
-  return { meta: selected[0].parsed.meta, buckets: activity.buckets, instructions,
+  return { pages: selected, meta: selected[0].parsed.meta, buckets: activity.buckets, instructions,
     archived: selected.every(page => page.archived) };
 }
 
@@ -250,20 +251,21 @@ export function codexSource(home) {
     ]);
     const files = [...live, ...archived];
     const threads = new Map();
-    const unreadable = await visit(files, (file, parsed) => {
+    const unreadable = await visit(files, (file, parsed, info) => {
       const id = parsed.meta.id;
       const thread = metadata.get(id);
       if (isInternal(thread?.source, thread?.thread_source)) return;
       if (!threads.has(id)) threads.set(id, []);
-      threads.get(id).push({ ...file, parsed });
+      threads.get(id).push({ ...file, parsed, size: info.size, mtime: info.mtimeMs });
     });
     const sessions = new Map();
     for (const [id, pages] of threads) {
       const thread = metadata.get(id);
-      const { meta, buckets, instructions, archived } = assemblePages(pages, thread);
+      const { meta, buckets, instructions, archived, pages: selected } = assemblePages(pages, thread);
       for (const bucket of buckets.values()) {
         const summary = summarize(meta, bucket, thread, archived);
-        sessions.set(`${summary.day}/${id}`, { summary, prompts: bucket.prompts, instructions });
+        sessions.set(`${summary.day}/${id}`, { summary, prompts: bucket.prompts, instructions,
+          transcripts: selected.filter(p => p.parsed.buckets.has(bucket.day)).map(({ path, size, mtime }) => ({ path, size, mtime })) });
       }
     }
     return { sessions, unreadable };

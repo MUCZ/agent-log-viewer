@@ -30,6 +30,12 @@ Use **All agents** to filter either view by source. Cmd-K focuses search, which 
 
 With Ghostty installed, **Open in Ghostty** opens the working directory from a project header or session drawer.
 
+## Daily reports
+
+In **By date**, open **Daily report** and select **Generate report**. Worklog uses the whole local day across projects and harnesses. It selects short excerpts from dated user requests, assistant replies, confirmed edits and available command outcomes. Two direct OpenRouter API steps extract tasks in small batches and group them into a Chinese report by project. This creates no harness session. Select **Copy Markdown** to copy the report.
+
+The server uses `google/gemini-4-hydrogen`. Set `OPENROUTER_API_KEY` or point `WORKLOG_OPENROUTER_KEY_FILE` at a file containing the raw key. By default it reads `~/Library/Application Support/Worklog/openrouter.key`. Generation sends excerpts and project hints to OpenRouter. Reports, usage and reusable task assessments are saved in `~/Library/Application Support/Worklog/reports`. Opening a saved report makes no model request. **Update report** reuses unchanged assessments and groups the day's tasks again.
+
 ## How the dashboard counts activity
 
 - In the date view, a session appears on each day with recorded activity in the Mac's time zone. The project view counts each session once and combines its daily activity within the selected window. Parent folders include their descendants by default.
@@ -40,4 +46,4 @@ With Ghostty installed, **Open in Ghostty** opens the working directory from a p
 - Changed files come from successful patch, edit and write tools. Edits made through shell commands may be absent.
 - For Codex, Worklog also reads archived rollouts and uses the read-only SQLite index for titles and related metadata when available. Codex subagents and review threads are omitted.
 
-There is no package installation, cloud service, LLM call, or persistent viewer cache.
+Browsing session history runs locally and requires no package installation or model API key.

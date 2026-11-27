@@ -4,10 +4,12 @@ import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { promisify } from 'node:util';
 import { sessionHistory } from './agent-sessions.mjs';
+import { dailyReports } from './daily-report.mjs';
 import { dayKey } from './session-log.mjs';
 
 const port = Number(process.env.PORT || 3737);
 const loadHistory = sessionHistory();
+const reports = dailyReports();
 const run = promisify(execFile);
 const files = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -113,6 +115,17 @@ const server = createServer(async (request, response) => {
 
   try {
     const url = new URL(request.url, origin);
+    if (url.pathname === '/api/daily-report') {
+      const day = url.searchParams.get('day');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return json(response, 400, { error: 'Invalid report date.' });
+      const generate = request.method === 'POST';
+      if (generate && request.headers.origin !== origin) return json(response, 403, { error: 'Open Worklog locally to generate reports.' });
+      if (!generate && request.method !== 'GET') return json(response, 405, { error: 'Expected GET or POST.' });
+      const { sessions } = await getSnapshot();
+      const entries = [...sessions.values()].filter(s => s.summary.day === day);
+      const state = generate ? await reports.start(day, entries) : await reports.status(day, entries);
+      return json(response, state.progress ? 202 : 200, state);
+    }
     if (url.pathname === '/api/open-in-ghostty') {
       if (request.method !== 'POST') return json(response, 405, { error: 'Only POST is supported.' });
       return await openInGhostty(request, response, origin);
@@ -127,7 +140,7 @@ const server = createServer(async (request, response) => {
       const source = url.searchParams.get('source') ?? 'codex';
       const key = `${source}/${url.searchParams.get('day')}/${url.searchParams.get('id')}`;
       const session = sessions.get(key);
-      return session ? json(response, 200, session) : json(response, 404, { error: 'This session is unavailable.' });
+      return session ? json(response, 200, { summary: session.summary, prompts: session.prompts, instructions: session.instructions }) : json(response, 404, { error: 'This session is unavailable.' });
     }
     const file = files.get(url.pathname);
     if (!file) return json(response, 404, { error: 'Page not found.' });
