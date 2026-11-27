@@ -513,13 +513,50 @@ function projectGroups(entries) {
     b.tokens - a.tokens || b.sessions.length - a.sessions.length);
 }
 
+function distributionCard(title, unit, segments, list, badge) {
+  segments.setAttribute('aria-hidden', 'true');
+  return el('section', 'project-index',
+    el('div', 'project-index-header',
+      el('div', 'project-index-heading', el('h2', '', title), badge),
+      el('p', 'project-index-caption', `Share of ${unit}`), segments), list);
+}
+
+function harnessLabel(source) {
+  return source === 'claude' ? 'Claude' : sourceNames[source];
+}
+
+function harnessDistribution(entries) {
+  const usage = new Map();
+  let total = 0;
+  for (const entry of entries) {
+    const source = entry.source ?? 'codex';
+    usage.set(source, (usage.get(source) ?? 0) + entry.tokens.total);
+    total += entry.tokens.total;
+  }
+  const segments = el('div', 'segments harness-segments');
+  const list = el('ul', 'harness-list');
+  for (const [source, tokens] of [...usage].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
+    const name = harnessLabel(source);
+    const share = total ? percent.format(tokens / total) : '—';
+    if (tokens) {
+      const segment = el('span', `segment harness-${source}`);
+      segment.style.flexGrow = tokens;
+      segments.append(segment);
+    }
+    const amount = el('span', 'harness-amount', `${compact.format(tokens)} tokens`);
+    amount.title = `${number.format(tokens)} tokens`;
+    list.append(el('li', `harness-entry harness-${source}`, el('strong', '', name),
+      amount, el('span', 'project-share', share)));
+  }
+  return distributionCard('Harnesses', 'tokens', segments, list);
+}
+
 function projectIndex(groups, cards) {
   const hasTokens = groups.some(group => group.tokens > 0);
   const unit = hasTokens ? 'tokens' : 'sessions';
   const weight = group => hasTokens ? group.tokens : group.sessions.length;
   const total = groups.reduce((sum, group) => sum + weight(group), 0);
   const segments = el('div', 'segments');
-  segments.setAttribute('aria-hidden', 'true');
   const index = el('ul', 'project-index-list');
   for (const [position, group] of groups.entries()) {
     const percent = Math.round(weight(group) / total * 100);
@@ -546,12 +583,7 @@ function projectIndex(groups, cards) {
     });
     index.append(el('li', '', jump));
   }
-  return el('section', 'project-index',
-    el('div', 'project-index-header',
-      el('div', 'project-index-heading', el('h2', '', 'Projects'), el('span', 'section-count', number.format(groups.length))),
-      el('p', 'project-index-caption', `Share of ${unit}`),
-      segments),
-    index);
+  return distributionCard('Projects', unit, segments, index, el('span', 'section-count', number.format(groups.length)));
 }
 
 function projectFilter() {
@@ -581,10 +613,8 @@ function sessionRow(entry, peakTokens) {
   const trimmedTitle = entry.title.replace(/…$/, '').toLocaleLowerCase();
   const preview = entry.preview && !entry.preview.toLocaleLowerCase().startsWith(trimmedTitle)
     ? el('span', 'session-preview', entry.preview) : null;
-  const fileInfo = el('span', 'row-file', entry.files.length ? icon('file') : null,
-    entry.files.length ? number.format(entry.files.length) : '—');
-  fileInfo.title = entry.files.length ? entry.files.join('\n') : 'No recorded file edits';
-  fileInfo.setAttribute('aria-label', count(entry.files.length, 'changed file'));
+  const fileInfo = entry.files.length ? el('span', 'row-file', icon('file'), count(entry.files.length, 'file')) : null;
+  if (fileInfo) fileInfo.title = entry.files.join('\n');
   const tokens = entry.tokens.total;
   const tokenFill = tokens > 0 ? el('span', 'token-fill') : null;
   if (tokenFill) tokenFill.style.width = `${tokens / peakTokens * 100}%`;
@@ -597,8 +627,8 @@ function sessionRow(entry, peakTokens) {
   if (entry.activityDays) time.title = 'Last recorded activity';
   const source = entry.source ?? 'codex';
   const session = el('button', 'session-row',
-    time, el('span', `row-source harness-${source}`, sourceNames[source]),
-    el('span', 'session-info', label, preview),
+    time, el('span', 'session-info',
+      el('span', 'session-headline', el('span', `row-source harness-${source}`, harnessLabel(source)), label), preview),
     fileInfo, usage,
     el('span', 'row-chevron', icon('right')));
   session.type = 'button';
@@ -642,10 +672,7 @@ function dailySummary(groups) {
 }
 
 function sessionMetrics(entries, caption, includeActiveTime = false) {
-  const byHarness = new Map();
   const totals = entries.reduce((sum, entry) => {
-    const source = entry.source ?? 'codex';
-    byHarness.set(source, (byHarness.get(source) ?? 0) + entry.tokens.total);
     sum.activeMs += entry.activeMs;
     sum.input += entry.tokens.input;
     sum.output += entry.tokens.output;
@@ -669,23 +696,7 @@ function sessionMetrics(entries, caption, includeActiveTime = false) {
     tiles.splice(1, 0, metric('activity', 'Requests', number.format(requests), 'Recorded model calls',
       'Counts model requests with usage recorded in the selected period.'));
   }
-  const breakdown = el('dl', 'harness-totals');
-  for (const [source, name] of Object.entries(sourceNames)) {
-    if (sourceFilter.value && sourceFilter.value !== source) continue;
-    const tokens = byHarness.get(source) ?? 0;
-    const share = totals.tokens ? percent.format(tokens / totals.tokens) : '';
-    breakdown.append(el('div', `harness-total harness-${source}`, el('dt', '', name),
-      el('dd', '', number.format(tokens), share ? el('span', 'harness-share', share) : null)));
-  }
-  return el('div', 'metrics', ...tiles, el('section', 'harness-breakdown', el('h2', '', 'Tokens by harness'), breakdown));
-}
-
-function sessionHeading(title, peakTokens, scaleScope) {
-  const tokens = el('span', 'row-stat', 'Tokens');
-  if (peakTokens) tokens.title = `Bar lengths are relative to the highest token total ${scaleScope}`;
-  const columns = el('div', 'session-columns', el('span', 'row-time', 'Time'),
-    el('span', 'source-heading', 'Harness'), el('span', 'session-info', 'Session'), el('span', 'row-file', 'Files'), tokens);
-  return el('div', 'timeline-heading', el('h2', '', title), columns);
+  return el('div', 'metrics', ...tiles);
 }
 
 function emptyView(glyph, heading, message, clearLabel, onClear) {
@@ -730,9 +741,9 @@ function dateView() {
       entry.day === day ? Math.max(peak, entry.tokens.total) : peak, 0);
     const cards = groups.map(group => groupCard(group, peakTokens));
     const timeline = el('section', 'timeline',
-      sessionHeading('Sessions', peakTokens, 'for this date'),
+      el('h2', 'timeline-heading', 'Sessions'),
       ...cards);
-    const rail = el('aside', 'activity-rail', projectIndex(groups, cards), dailySummary(groups));
+    const rail = el('aside', 'activity-rail', harnessDistribution(entries), projectIndex(groups, cards), dailySummary(groups));
     rail.setAttribute('aria-label', 'Daily overview');
     nodes.push(el('div', 'activity-layout', timeline, rail));
   } else {
@@ -821,7 +832,7 @@ function projectView() {
   const activeDays = new Set(recent.flatMap(entry => entry.activityDays)).size;
   const metrics = sessionMetrics(recent, query ? `Of ${count(sessions.size, 'session')}` : `Across ${count(activeDays, 'day')}`);
   const timeline = el('section', `timeline project-timeline ${tone}`,
-    sessionHeading('Recent sessions', peakTokens, 'in the selected folder scope'));
+    el('h2', 'timeline-heading', 'Recent sessions'));
   for (const [date, entries] of dates) {
     const label = date === snapshot.today ? `Today · ${formatDay(date)}` : dayFormat.format(parseDay(date));
     const year = date.slice(0, 4) !== snapshot.today.slice(0, 4) ? `, ${date.slice(0, 4)}` : '';
@@ -839,7 +850,9 @@ function projectView() {
         return row;
       })));
   }
-  return [...nodes, metrics, timeline];
+  const rail = el('aside', 'activity-rail', harnessDistribution(recent));
+  rail.setAttribute('aria-label', 'Project overview');
+  return [...nodes, metrics, el('div', 'activity-layout', timeline, rail)];
 }
 
 function render() {
