@@ -64,7 +64,7 @@ export function sessionActivity() {
     if (!buckets.has(day)) {
       buckets.set(day, {
         day, start: time, end: time, activeMs: 0, prompts: [], files: new Set(),
-        tokens: { input: 0, output: 0, total: 0 }, model: null,
+        tokens: { input: 0, output: 0, total: 0 }, requests: 0, model: null,
       });
     }
     return buckets.get(day);
@@ -114,6 +114,7 @@ export function summarize(meta, bucket, thread = meta, archived) {
     preview: headline(firstPrompt, 180),
     model: bucket.model || thread?.model || null,
     turns: bucket.prompts.length,
+    requests: bucket.requests,
     files: [...bucket.files].sort(),
     tokens: bucket.tokens,
     archived: Boolean(thread?.archived || archived),

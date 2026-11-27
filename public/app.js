@@ -1,4 +1,4 @@
-import { indexProjects, indexProjectTree, folderSessions } from './project-tree.js';
+import { recentProjectEntries, indexProjects, indexProjectTree, folderSessions } from './project-tree.js';
 
 const $ = selector => document.querySelector(selector);
 
@@ -123,6 +123,7 @@ const sourceNames = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi' };
 let allSessions = [];
 let snapshot;
 let snapshotText;
+const dateProjects = new Map();
 let histories = new Map();
 let projectTree;
 const expandedFolders = new Map();
@@ -147,7 +148,8 @@ for (const control of viewButtons) {
     if (!snapshot || view === control.dataset.view) return;
     view = control.dataset.view;
     search.value = searches[view];
-    render();
+    if (view === 'date') applyFilter();
+    else render();
     window.scrollTo(0, 0);
   });
 }
@@ -185,10 +187,13 @@ function applySourceFilter() {
   snapshot.sessions = sourceFilter.value
     ? allSessions.filter(entry => (entry.source ?? 'codex') === sourceFilter.value)
     : allSessions;
-  setProjectHistories(snapshot.sessions);
-  if (project && !histories.has(project)) project = '';
+  dateProjects.clear();
+  for (const entry of snapshot.sessions) dateProjects.set(entry.cwd, entry.projectName);
+  if (project && !dateProjects.has(project)) project = '';
+  projectTree = null;
   day ||= snapshot.today;
-  applyFilter();
+  if (view === 'date') applyFilter();
+  else render();
 }
 
 sourceFilter.addEventListener('change', () => {
@@ -355,10 +360,10 @@ function metric(glyph, label, value, caption, title) {
   return tile;
 }
 
-function setProjectHistories(entries) {
-  histories = indexProjects(entries);
-  projectTree = indexProjectTree(histories);
-}
+$('#project-period').addEventListener('change', () => {
+  projectTree = null;
+  render();
+});
 
 function combineSession(entries) {
   const slices = [...entries].sort((a, b) => a.start - b.start);
@@ -371,12 +376,14 @@ function combineSession(entries) {
     activityDays: slices.map(entry => entry.day),
     activeMs: 0,
     turns: 0,
+    requests: 0,
     tokens: { input: 0, output: 0, total: 0 },
     files: [...new Set(slices.flatMap(entry => entry.files))].sort(),
   };
   for (const slice of slices) {
     summary.activeMs += slice.activeMs;
     summary.turns += slice.turns;
+    summary.requests += slice.requests ?? 0;
     summary.tokens.input += slice.tokens.input;
     summary.tokens.output += slice.tokens.output;
     summary.tokens.total += slice.tokens.total;
@@ -425,12 +432,12 @@ function renderProjectList() {
       const toggle = el('span', 'folder-toggle', hasChildren ? icon(expanded ? 'down' : 'right') : null);
       if (hasChildren) toggle.title = expanded ? 'Collapse folder' : 'Expand folder';
       const name = el('span', 'folder-name', node.label);
-      const stats = el('span', 'folder-stats', count(node.sessionCount, 'session'), ' · ', compact.format(node.tokens) + ' tokens');
+      const stats = el('span', 'folder-stats', count(node.requests, 'request'), ' · ', compact.format(node.tokens) + ' tokens');
       const glyph = el('span', `folder-icon tone-${projectColor.get(node.cwd) ?? 'slate'}`, icon('folder'));
       const row = el('div', 'folder-row', toggle, glyph, el('span', 'folder-label', name, stats));
       const item = el('li', 'folder-item', row);
       item.dataset.cwd = node.cwd;
-      item.title = `${node.cwd || node.name} · ${number.format(node.tokens)} tokens · Last active ${lastActiveDate.format(node.lastActive)}`;
+      item.title = `${node.cwd || node.name} · ${count(node.sessionCount, 'session')} · ${number.format(node.tokens)} tokens · Last active ${lastActiveDate.format(node.lastActive)}`;
       item.setAttribute('role', 'treeitem');
       item.setAttribute('aria-label', node.label + ', ' + stats.textContent);
       item.setAttribute('aria-selected', String(currentProject === node.cwd));
@@ -547,14 +554,14 @@ function projectIndex(groups, cards) {
 }
 
 function projectFilter() {
-  const available = [...histories.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const available = [...dateProjects].sort((a, b) => a[1].localeCompare(b[1]));
   const select = el('select', '');
   select.id = 'project';
   select.setAttribute('aria-label', 'Filter by project');
   select.append(new Option('All projects', ''));
-  for (const { cwd, name } of available) {
+  for (const [cwd, name] of available) {
     if (!cwd) continue;
-    const label = available.some(other => other.name === name && other.cwd !== cwd) ? cwd : name;
+    const label = available.some(([other, label]) => label === name && other !== cwd) ? cwd : name;
     const option = new Option(label, cwd);
     option.title = cwd;
     select.append(option);
@@ -650,8 +657,12 @@ function sessionMetrics(entries, caption, includeActiveTime = false) {
   if (includeActiveTime) {
     tiles.push(metric('clock', 'Active time', duration(totals.activeMs), 'Approximate',
       'Adds activity within each session. Gaps over 10 minutes are excluded. Sessions can overlap.'));
+  } else {
+    const requests = entries.reduce((sum, entry) => sum + entry.requests, 0);
+    tiles.splice(1, 0, metric('activity', 'Requests', number.format(requests), 'Recorded model calls',
+      'Counts model requests with usage recorded in the selected period.'));
   }
-  return el('div', includeActiveTime ? 'metrics' : 'metrics project-metrics', ...tiles);
+  return el('div', 'metrics', ...tiles);
 }
 
 function sessionHeading(title, peakTokens, scaleScope) {
@@ -721,6 +732,11 @@ function dateView() {
 }
 
 function projectView() {
+  const days = Number($('#project-period input:checked').value);
+  if (!projectTree) {
+    histories = indexProjects(recentProjectEntries(snapshot.sessions, snapshot.today, days));
+    projectTree = indexProjectTree(histories);
+  }
   if (!projectTree.byPath.has(currentProject)) {
     currentProject = project && histories.has(project) ? project : histories.keys().next().value;
     includeSubfolders = true;
@@ -731,7 +747,8 @@ function projectView() {
   }
   renderProjectList();
   const folder = projectTree.byPath.get(currentProject);
-  if (!folder) return [emptyView('folder', 'No projects yet', 'Projects appear here when the selected agents record local activity.')];
+  if (!folder) return [emptyView('folder', days === 1 ? 'No project activity today' : `No project activity in the last ${days} days`,
+    'Choose another activity window or agent to explore more sessions.')];
 
   const title = el('h1', '', folder.name);
   title.tabIndex = -1;

@@ -97,6 +97,7 @@ test('Claude counts an API response once, filters injected messages and tracks c
   const first = sessions.get('claude/2026-03-07/' + id);
   const second = sessions.get('claude/2026-03-08/' + id);
   assert.equal(first.summary.title, 'Chosen name');
+  assert.deepEqual([first.summary.requests, second.summary.requests], [1, 1]);
   assert.deepEqual(first.prompts.map(p => p.text), ['First paragraph\nSearchable second paragraph']);
   assert.deepEqual(second.prompts.map(p => p.text), ['<pasted_content>User supplied text</pasted_content>']);
   assert.deepEqual(first.summary.tokens, { input: 35, output: 4, total: 39 });
@@ -128,6 +129,7 @@ test('Pi supports branches, cache usage, structured system instructions and succ
   const first = sessions.get('pi/2026-03-07/' + id);
   const second = sessions.get('pi/2026-03-08/' + id);
   assert.equal(first.summary.title, 'Renamed Pi session');
+  assert.deepEqual([first.summary.requests, second.summary.requests], [1, 1]);
   assert.equal(first.summary.model, 'pi-model');
   assert.deepEqual(first.summary.tokens, { input: 36, output: 14, total: 50 });
   assert.deepEqual(first.prompts.map(p => p.text), ['Pi first\n[Image]']);
@@ -185,10 +187,23 @@ test('Codex joins paginated rollouts in time order and selects a single copy of 
   const b = first.get('codex/2026-03-08/' + id);
   assert.equal(a.summary.tokens.total, 20);
   assert.equal(b.summary.tokens.total, 9);
+  assert.deepEqual([a.summary.requests, b.summary.requests], [1, 2]);
   assert.equal(a.summary.activeMs, 120000);
   assert.equal(b.summary.activeMs, 120000);
   assert.equal(a.prompts[0].text, 'Original');
   assert.deepEqual(b.prompts.map(p => p.text), ['Continuation']);
   assert.deepEqual((await f.load()).sessions, first);
   assert.deepEqual((await sessionHistory(f.env)()).sessions, first);
+});
+
+test('unchanged legacy Codex token counters do not add requests', async t => {
+  const f = await fixture(t);
+  const counts = [0, 12, 12, 17].map(total_tokens => ({
+    type: 'event_msg', timestamp: before,
+    payload: { type: 'token_count', info: { total_token_usage: { total_tokens } } },
+  }));
+  await writeLog(f.codex, [{ type: 'session_meta', payload: { id, cwd } }, ...counts]);
+  const { summary } = (await f.load()).sessions.get('codex/2026-03-07/' + id);
+  assert.equal(summary.requests, 2);
+  assert.equal(summary.tokens.total, 17);
 });

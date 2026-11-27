@@ -18,6 +18,7 @@ function positive(value) {
 }
 
 function addUsage(bucket, input, output, total = input + output) {
+  bucket.requests++;
   bucket.tokens.input += input;
   bucket.tokens.output += output;
   bucket.tokens.total += total;
@@ -167,7 +168,7 @@ async function parseClaude({ path }, size) {
       }
     }
     const usage = message.usage;
-    if (!usage) continue;
+    if (!usage || message.model === '<synthetic>') continue;
     const input = positive(usage.input_tokens) + positive(usage.cache_read_input_tokens)
       + positive(usage.cache_creation_input_tokens);
     const output = positive(usage.output_tokens);

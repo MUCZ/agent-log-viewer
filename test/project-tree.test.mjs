@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { folderSessions, indexProjects, indexProjectTree } from '../public/project-tree.js';
+import { recentProjectEntries, folderSessions, indexProjects, indexProjectTree } from '../public/project-tree.js';
 
 function entry(cwd, id, total, source = 'codex', end = 1) {
   return { cwd, id, source, end, projectName: cwd.split('/').at(-1) || cwd || 'No working directory', tokens: { total } };
@@ -53,4 +53,21 @@ test('missing working directory and filesystem root remain selectable and empty 
   assert.equal(tree.byPath.get('/').children[0].cwd, '/tmp');
   assert.equal(tree.byPath.get('/').sessionCount, 2);
   assert.deepEqual(indexProjectTree(indexProjects([])).roots, []);
+});
+
+test('project windows bound directory rollups and cross-day sessions to local calendar dates', () => {
+  const entries = [
+    ['2027-01-03', '/future', 99], ['2027-01-02', '/work', 1], ['2026-12-31', '/work', 2],
+    ['2026-12-30', '/work/api', 4], ['2026-12-27', '/work', 8], ['2026-12-26', '/old', 99],
+  ].map(([day, cwd, requests]) => ({ ...entry(cwd, 'shared', requests * 10), day, requests }));
+  for (const [days, requests, slices, directories] of [[1, 1, 1, 1], [3, 3, 2, 1], [7, 15, 4, 2]]) {
+    const histories = indexProjects(recentProjectEntries(entries, '2027-01-02', days));
+    const root = indexProjectTree(histories).roots[0];
+    assert.equal(histories.size, directories);
+    assert.equal(root.cwd, '/work');
+    assert.equal(root.requests, requests);
+    assert.equal(root.tokens, requests * 10);
+    assert.equal(root.sessionCount, 1);
+    assert.equal([...folderSessions(root, true).values()][0].length, slices);
+  }
 });

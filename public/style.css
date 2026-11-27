@@ -162,6 +162,15 @@ button.calendar-day[aria-current]:hover { background: #d2f4e9; }
 .date-text { display: flex; align-items: baseline; gap: 7px; white-space: nowrap; }
 .date-name { font-size: .875rem; font-weight: 620; }
 .date-description { color: var(--nav-muted); font-size: .75rem; }
+#project-period { margin: 0 16px 20px; padding: 0; border: 0; }
+#project-period legend { margin-bottom: 7px; padding: 0; font-size: .75rem; font-weight: 600; color: var(--nav-muted); }
+.period-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 3px; border-radius: 8px; background: #101a2b; }
+.period-options label { position: relative; cursor: pointer; }
+.period-options input { position: absolute; inset: 0; margin: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.period-options span { display: block; padding: 6px; border-radius: 5px; color: var(--nav-muted); text-align: center; font-size: .8125rem; font-weight: 600; }
+.period-options label:hover span { background: #25344a; }
+.period-options input:checked + span { color: #163730; background: var(--nav-accent); }
+.period-options input:focus-visible + span { outline: 2px solid white; outline-offset: 1px; }
 .folder-header { display: flex; align-items: center; justify-content: space-between; padding: 0 19px 8px; }
 .folder-header span { font-size: .75rem; font-variant-numeric: tabular-nums; }
 .project-list { overflow: auto; padding: 0 9px 12px; scrollbar-width: thin; scrollbar-color: #55647b transparent; }
@@ -417,7 +426,6 @@ summary::-webkit-details-marker { display: none; }
 .project-page-title { display: grid; gap: 5px; min-width: 0; }
 .project-page-title h1 { font-size: clamp(1.5rem, 2.7vw, 2.25rem); overflow-wrap: anywhere; }
 .project-page-heading .ghostty-action { margin-inline-start: auto; justify-items: end; text-align: right; }
-.project-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .project-timeline { margin-top: 22px; }
 .project-day { border: 1px solid var(--line); border-radius: 11px; background: var(--paper); box-shadow: var(--shadow); }
 .project-day + .project-day { margin-top: 14px; }

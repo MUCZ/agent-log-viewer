@@ -74,7 +74,9 @@ function tokenDeltas(records, buckets) {
   for (const { time, usage, delta, responseId } of records) {
     if (responseId && seen.has(responseId)) continue;
     if (responseId) seen.add(responseId);
-    const tokens = buckets.get(dayKey(time)).tokens;
+    const bucket = buckets.get(dayKey(time));
+    const tokens = bucket.tokens;
+    const before = tokens.total;
     for (const key of ['input', 'output', 'total']) {
       const value = tokenValue(usage, key);
       const increment = tokenValue(delta, key);
@@ -86,6 +88,7 @@ function tokenDeltas(records, buckets) {
         previous[key] = Math.max(previous[key], value);
       }
     }
+    if (responseId || delta || tokens.total > before) bucket.requests++;
   }
 }
 

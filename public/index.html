@@ -37,6 +37,14 @@
         <nav id="dates" class="date-list" aria-label="Activity dates"></nav>
       </section>
       <section id="project-history" aria-label="Activity by project" hidden>
+        <fieldset id="project-period">
+          <legend>Activity window</legend>
+          <div class="period-options">
+            <label><input type="radio" name="project-days" value="1"><span>1 day</span></label>
+            <label><input type="radio" name="project-days" value="3" checked><span>3 days</span></label>
+            <label><input type="radio" name="project-days" value="7"><span>7 days</span></label>
+          </div>
+        </fieldset>
         <div class="folder-header side-label">Working directories <span id="project-count"></span></div>
         <nav id="project-list" class="project-list" aria-label="Working directories"></nav>
       </section>

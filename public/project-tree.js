@@ -1,12 +1,24 @@
+export function* recentProjectEntries(entries, today, days) {
+  const first = new Date(today + 'T00:00:00Z');
+  first.setUTCDate(first.getUTCDate() - days + 1);
+  const firstDay = first.toISOString().slice(0, 10);
+  // The activity feed lists daily slices newest first.
+  for (const entry of entries) {
+    if (entry.day < firstDay) break;
+    if (entry.day <= today) yield entry;
+  }
+}
+
 export function indexProjects(entries) {
   const histories = new Map();
   for (const entry of entries) {
     if (!histories.has(entry.cwd)) {
-      histories.set(entry.cwd, { cwd: entry.cwd, name: entry.projectName, lastActive: entry.end, tokens: 0, sessions: new Map() });
+      histories.set(entry.cwd, { cwd: entry.cwd, name: entry.projectName, lastActive: entry.end, tokens: 0, requests: 0, sessions: new Map() });
     }
     const history = histories.get(entry.cwd);
     history.lastActive = Math.max(history.lastActive, entry.end);
     history.tokens += entry.tokens.total;
+    history.requests += entry.requests ?? 0;
     const key = JSON.stringify([entry.source ?? 'codex', entry.id]);
     if (!history.sessions.has(key)) history.sessions.set(key, []);
     history.sessions.get(key).push(entry);
@@ -50,10 +62,12 @@ export function indexProjectTree(histories) {
     if (node.history) node.histories.unshift(node.history);
     const identities = new Set();
     node.tokens = 0;
+    node.requests = 0;
     node.lastActive = 0;
     for (const history of node.histories) {
       for (const key of history.sessions.keys()) identities.add(key);
       node.tokens += history.tokens;
+      node.requests += history.requests;
       node.lastActive = Math.max(node.lastActive, history.lastActive);
     }
     node.sessionCount = identities.size;
