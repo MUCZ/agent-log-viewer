@@ -2,6 +2,10 @@
 
 Worklog is a local, read-only activity dashboard for Codex, Claude Code and Pi on macOS.
 
+## Platform scope
+
+Develop and test Worklog for desktop browsers on macOS only. Mobile development and mobile testing are outside the project's scope.
+
 ## Start
 
 Requires Node.js 22.13 or newer. From this directory, run:
