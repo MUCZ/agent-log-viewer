@@ -389,7 +389,7 @@ function combineSession(entries) {
     summary.tokens.output += slice.tokens.output;
     summary.tokens.total += slice.tokens.total;
   }
-  summary.preview ||= slices.findLast(slice => slice.preview)?.preview ?? '';
+  summary.preview = slices.find(slice => slice.preview)?.preview ?? '';
   summary.model ||= slices.findLast(slice => slice.model)?.model ?? null;
   return summary;
 }
@@ -611,7 +611,7 @@ function projectFilter() {
 function sessionRow(entry, peakTokens) {
   const label = el('span', 'session-title', entry.title);
   const trimmedTitle = entry.title.replace(/…$/, '').toLocaleLowerCase();
-  const preview = entry.preview && !entry.preview.toLocaleLowerCase().startsWith(trimmedTitle)
+  const preview = entry.preview && (entry.source === 'pi' || !entry.preview.toLocaleLowerCase().startsWith(trimmedTitle))
     ? el('span', 'session-preview', entry.preview) : null;
   const fileInfo = entry.files.length ? el('span', 'row-file', icon('file'), count(entry.files.length, 'file')) : null;
   if (fileInfo) fileInfo.title = entry.files.join('\n');
@@ -628,7 +628,7 @@ function sessionRow(entry, peakTokens) {
   const source = entry.source ?? 'codex';
   const session = el('button', 'session-row',
     time, el('span', 'session-info',
-      el('span', 'session-headline', el('span', `row-source harness-${source}`, harnessLabel(source)), label), preview),
+      el('span', `row-source harness-${source}`, harnessLabel(source)), label, preview),
     fileInfo, usage,
     el('span', 'row-chevron', icon('right')));
   session.type = 'button';

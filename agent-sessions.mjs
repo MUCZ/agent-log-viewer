@@ -2,7 +2,7 @@ import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { codexSource } from './codex.mjs';
-import { cachedLogs, filePaths, milliseconds, readJSONL, sessionActivity, summarize } from './session-log.mjs';
+import { cachedLogs, filePaths, milliseconds, promptExcerpt, readJSONL, sessionActivity, summarize } from './session-log.mjs';
 
 function textContent(content) {
   if (typeof content === 'string') return content.trim();
@@ -39,6 +39,25 @@ function finishEdit(pending, id, success, bucket) {
 function trackEdit(pending, id, path, cwd) {
   if (!id || typeof path !== 'string' || !path) return;
   pending.set(id, filePaths([{ path }], cwd)[0]);
+}
+
+function piTitle(meta, buckets) {
+  const prompts = [...buckets.values()].flatMap(bucket => bucket.prompts).sort((a, b) => a.time - b.time);
+  const greeting = /^(?:hello|hi|hey)[!.\s]*$/i;
+  const opening = promptExcerpt(prompts[0]?.text ?? '');
+  if (opening.files.length && opening.body) return opening.files[0];
+  if (greeting.test(opening.body)) {
+    for (const prompt of prompts.slice(1)) {
+      const { body, files } = promptExcerpt(prompt.text);
+      if (body && !greeting.test(body)) return body.split('\n', 1)[0];
+      if (files.length) return files[0];
+    }
+  }
+  for (const bucket of buckets.values()) {
+    const file = bucket.files.values().next().value;
+    if (file) return `Edits to ${basename(file)}`;
+  }
+  return meta.cwd ? `Session in ${basename(meta.cwd) || meta.cwd}` : 'Untitled session';
 }
 
 async function parsePi({ path }, size) {
@@ -99,6 +118,7 @@ async function parsePi({ path }, size) {
     bucket.model = model || bucket.model;
   }
   activity.finish();
+  if (meta && !meta.title?.trim()) meta.title = piTitle(meta, activity.buckets);
   return meta && { meta, buckets: activity.buckets, instructions: system ? { system } : undefined };
 }
 
@@ -231,7 +251,10 @@ function transcriptSource(directory, source, parse) {
     });
     const sessions = new Map();
     for (const { parsed: { meta, buckets, instructions }, path } of transcripts.values()) {
-      meta.title ||= [...buckets.values()].find(bucket => bucket.prompts.length)?.prompts[0].text;
+      if (!meta.title) {
+        const first = [...buckets.values()].find(bucket => bucket.prompts.length)?.prompts[0];
+        if (first) meta.title = promptExcerpt(first.text).preview;
+      }
       for (const bucket of buckets.values()) {
         const summary = summarize(meta, bucket);
         if (source === 'pi') summary.sessionFile = path;

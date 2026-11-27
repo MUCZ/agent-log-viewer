@@ -45,6 +45,19 @@ function headline(text, length = 96) {
   return points.length <= length ? line : points.slice(0, length - 1).join('') + '…';
 }
 
+// Keep attachment metadata out of list excerpts. The transcript retains the original text.
+export function promptExcerpt(text) {
+  const files = [];
+  const body = text.replace(/<image\b[^>]*?\bpath="([^"]+)"[^>]*>\s*<\/image>/gi, (_, path) => {
+    files.push(basename(path));
+    return ' ';
+  }).trim().replace(/^(?:(?:@|\/|~\/|\.{1,2}\/)[^\s<>]+\.\w+(?:\s+|$))+/u, refs => {
+    for (const ref of refs.trim().split(/\s+/)) files.push(basename(ref.replace(/^@/, '')));
+    return '';
+  }).trim();
+  return { body, files, preview: headline(body || files.join(' · '), 180) };
+}
+
 export function filePaths(changes, cwd) {
   const entries = Array.isArray(changes)
     ? changes.flatMap(change => [change.path, change.move_path])
@@ -100,8 +113,8 @@ export function sessionActivity() {
 export function summarize(meta, bucket, thread = meta, archived) {
   const directory = thread?.cwd || meta.cwd;
   const cwd = typeof directory === 'string' ? directory : '';
-  const firstPrompt = bucket.prompts[0]?.text || '';
-  const title = headline(thread?.name || thread?.title) || headline(firstPrompt) || 'Untitled session';
+  const { preview } = promptExcerpt(bucket.prompts[0]?.text ?? '');
+  const title = headline(thread?.name || thread?.title) || headline(preview) || 'Untitled session';
   return {
     id: meta.id,
     day: bucket.day,
@@ -111,7 +124,7 @@ export function summarize(meta, bucket, thread = meta, archived) {
     cwd,
     projectName: cwd ? basename(cwd) || cwd : 'No working directory',
     title,
-    preview: headline(firstPrompt, 180),
+    preview,
     model: bucket.model || thread?.model || null,
     turns: bucket.prompts.length,
     requests: bucket.requests,

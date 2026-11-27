@@ -129,6 +129,7 @@ test('Pi supports branches, cache usage, structured system instructions and succ
   const first = sessions.get('pi/2026-03-07/' + id);
   const second = sessions.get('pi/2026-03-08/' + id);
   assert.equal(first.summary.title, 'Renamed Pi session');
+  assert.equal(first.summary.preview, 'Pi first [Image]');
   assert.deepEqual([first.summary.requests, second.summary.requests], [1, 1]);
   assert.equal(first.summary.model, 'pi-model');
   assert.deepEqual(first.summary.tokens, { input: 36, output: 14, total: 50 });
@@ -139,6 +140,36 @@ test('Pi supports branches, cache usage, structured system instructions and succ
   assert.deepEqual(second.summary.tokens, { input: 4, output: 2, total: 6 });
   assert.equal(first.summary.activeMs, 120000);
   assert.equal(second.summary.activeMs, 120000);
+});
+
+test('unnamed Pi sessions keep the opening message as a separate preview', async t => {
+  const f = await fixture(t);
+  const summary = async records => {
+    await writeLog(f.pi, [header, ...records]);
+    return (await f.load()).sessions.get('pi/2026-03-07/' + id);
+  };
+  const raw = cwd + '/incident.md\n@transcript.md\nExplain the timeout';
+  const attached = await summary([pi('user', raw)]);
+  assert.equal(attached.summary.title, 'incident.md');
+  assert.equal(attached.summary.preview, 'Explain the timeout');
+  assert.equal(attached.prompts[0].text, raw);
+
+  const greeted = await summary([pi('user', 'hello'), pi('user', 'Check the retry limit', {}, after)]);
+  assert.equal(greeted.summary.title, 'Check the retry limit');
+  assert.equal(greeted.summary.preview, 'hello');
+  const plain = await summary([pi('user', 'Inspect the release notes')]);
+  assert.equal(plain.summary.title, 'Session in sample');
+  assert.equal(plain.summary.preview, 'Inspect the release notes');
+});
+
+test('image previews show user text or the attachment name and retain the original prompt', async t => {
+  const f = await fixture(t);
+  const tag = '<image name=[Image #1] path="/sample data/plot.png"></image>';
+  await writeLog(f.claude, [claude('user', tag + '\nCompare these results'), claude('user', tag, { timestamp: after })]);
+  const { sessions } = await f.load();
+  assert.equal(sessions.get('claude/2026-03-07/' + id).summary.preview, 'Compare these results');
+  assert.equal(sessions.get('claude/2026-03-08/' + id).summary.preview, 'plot.png');
+  assert.equal(sessions.get('claude/2026-03-08/' + id).prompts[0].text, tag);
 });
 
 test('updates, truncation, missing stores and a broken source are isolated across refreshes', async t => {
