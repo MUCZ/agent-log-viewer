@@ -85,6 +85,7 @@ const shortDay = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeri
 const weekday = new Intl.DateTimeFormat('en-US', { weekday: 'short' });
 const number = new Intl.NumberFormat('en-US');
 const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+const percent = new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 1 });
 let zone = 'UTC';
 let clock = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: zone });
 const parseDay = day => new Date(day + 'T12:00:00');
@@ -580,8 +581,10 @@ function sessionRow(entry, peakTokens) {
   const trimmedTitle = entry.title.replace(/…$/, '').toLocaleLowerCase();
   const preview = entry.preview && !entry.preview.toLocaleLowerCase().startsWith(trimmedTitle)
     ? el('span', 'session-preview', entry.preview) : null;
-  const fileInfo = entry.files.length ? el('span', 'row-file', icon('file'), count(entry.files.length, 'file')) : null;
-  if (fileInfo) fileInfo.title = entry.files.join('\n');
+  const fileInfo = el('span', 'row-file', entry.files.length ? icon('file') : null,
+    entry.files.length ? number.format(entry.files.length) : '—');
+  fileInfo.title = entry.files.length ? entry.files.join('\n') : 'No recorded file edits';
+  fileInfo.setAttribute('aria-label', count(entry.files.length, 'changed file'));
   const tokens = entry.tokens.total;
   const tokenFill = tokens > 0 ? el('span', 'token-fill') : null;
   if (tokenFill) tokenFill.style.width = `${tokens / peakTokens * 100}%`;
@@ -590,12 +593,13 @@ function sessionRow(entry, peakTokens) {
   const usage = el('span', 'row-stat',
     el('span', 'row-tokens', tokens ? `${compact.format(tokens)} tokens` : '—'), tokenBar);
   usage.title = tokens ? `${number.format(tokens)} tokens` : 'No token usage recorded';
-  const time = el('span', 'time-range', entry.activityDays ? clock.format(entry.end) : timeRange(entry));
+  const time = el('span', 'row-time', entry.activityDays ? clock.format(entry.end) : timeRange(entry));
   if (entry.activityDays) time.title = 'Last recorded activity';
+  const source = entry.source ?? 'codex';
   const session = el('button', 'session-row',
-    el('span', 'row-time', time, el('span', 'row-source', sourceNames[entry.source ?? 'codex']), fileInfo),
+    time, el('span', `row-source harness-${source}`, sourceNames[source]),
     el('span', 'session-info', label, preview),
-    usage,
+    fileInfo, usage,
     el('span', 'row-chevron', icon('right')));
   session.type = 'button';
   label.title = entry.title;
@@ -638,7 +642,10 @@ function dailySummary(groups) {
 }
 
 function sessionMetrics(entries, caption, includeActiveTime = false) {
+  const byHarness = new Map();
   const totals = entries.reduce((sum, entry) => {
+    const source = entry.source ?? 'codex';
+    byHarness.set(source, (byHarness.get(source) ?? 0) + entry.tokens.total);
     sum.activeMs += entry.activeMs;
     sum.input += entry.tokens.input;
     sum.output += entry.tokens.output;
@@ -662,13 +669,23 @@ function sessionMetrics(entries, caption, includeActiveTime = false) {
     tiles.splice(1, 0, metric('activity', 'Requests', number.format(requests), 'Recorded model calls',
       'Counts model requests with usage recorded in the selected period.'));
   }
-  return el('div', 'metrics', ...tiles);
+  const breakdown = el('dl', 'harness-totals');
+  for (const [source, name] of Object.entries(sourceNames)) {
+    if (sourceFilter.value && sourceFilter.value !== source) continue;
+    const tokens = byHarness.get(source) ?? 0;
+    const share = totals.tokens ? percent.format(tokens / totals.tokens) : '';
+    breakdown.append(el('div', `harness-total harness-${source}`, el('dt', '', name),
+      el('dd', '', number.format(tokens), share ? el('span', 'harness-share', share) : null)));
+  }
+  return el('div', 'metrics', ...tiles, el('section', 'harness-breakdown', el('h2', '', 'Tokens by harness'), breakdown));
 }
 
 function sessionHeading(title, peakTokens, scaleScope) {
-  const scale = peakTokens ? el('span', 'token-scale', 'Token use') : null;
-  if (scale) scale.title = `Bar lengths are relative to the highest token total ${scaleScope}`;
-  return el('div', 'timeline-heading', el('h2', '', title), scale);
+  const tokens = el('span', 'row-stat', 'Tokens');
+  if (peakTokens) tokens.title = `Bar lengths are relative to the highest token total ${scaleScope}`;
+  const columns = el('div', 'session-columns', el('span', 'row-time', 'Time'),
+    el('span', 'source-heading', 'Harness'), el('span', 'session-info', 'Session'), el('span', 'row-file', 'Files'), tokens);
+  return el('div', 'timeline-heading', el('h2', '', title), columns);
 }
 
 function emptyView(glyph, heading, message, clearLabel, onClear) {
