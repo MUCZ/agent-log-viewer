@@ -259,9 +259,6 @@ function expandCalendar(expanded) {
   calendarToggle.setAttribute('aria-expanded', String(expanded));
   $('#calendar-body').hidden = calendarControls.hidden = !expanded;
 }
-const smallScreen = window.matchMedia('(max-width: 730px)');
-expandCalendar(!smallScreen.matches);
-smallScreen.addEventListener('change', () => expandCalendar(!smallScreen.matches));
 calendarToggle.addEventListener('click', () => expandCalendar($('#calendar-body').hidden));
 
 let calendarMonth;
@@ -325,7 +322,6 @@ function renderCalendar(totals) {
 
 function renderDates(days) {
   const dates = $('#dates');
-  const { scrollTop, scrollLeft } = dates;
   const totals = new Map();
   dates.replaceChildren();
   for (const [date, entries] of days) {
@@ -348,8 +344,6 @@ function renderDates(days) {
     dates.append(item);
   }
   if (!days.size) dates.append(el('p', 'sidebar-empty', 'No matching dates'));
-  dates.scrollTop = scrollTop;
-  dates.scrollLeft = scrollLeft;
   renderCalendar(totals);
 }
 
