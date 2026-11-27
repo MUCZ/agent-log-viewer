@@ -69,6 +69,8 @@ export function filePaths(changes, cwd) {
   });
 }
 
+const IDLE_GAP = 10 * 60 * 1000;
+
 export function sessionActivity() {
   const activity = [];
   const buckets = new Map();
@@ -93,11 +95,19 @@ export function sessionActivity() {
 
   function finish() {
     activity.sort((a, b) => a - b);
+    // Bursts of events separated by at most the idle gap, kept per local day for timelines.
+    for (const bucket of buckets.values()) bucket.segments = [];
+    for (const time of activity) {
+      const segments = bucketAt(time).segments;
+      const last = segments.at(-1);
+      if (last && time - last[1] <= IDLE_GAP) last[1] = time;
+      else segments.push([time, time]);
+    }
     for (let index = 1; index < activity.length; index++) {
       const previous = activity[index - 1];
       const current = activity[index];
       const gap = current - previous;
-      if (gap > 10 * 60 * 1000) continue;
+      if (gap > IDLE_GAP) continue;
       const startOfDay = localMidnight(current);
       if (previous < startOfDay) {
         bucketAt(previous).activeMs += startOfDay - previous;
@@ -121,6 +131,7 @@ export function summarize(meta, bucket, thread = meta, archived) {
     start: bucket.start,
     end: bucket.end,
     activeMs: bucket.activeMs,
+    segments: bucket.segments ?? [[bucket.start, bucket.end]],
     cwd,
     projectName: cwd ? basename(cwd) || cwd : 'No working directory',
     title,
