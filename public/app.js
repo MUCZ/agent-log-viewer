@@ -123,6 +123,9 @@ const detailContent = $('#detail-content');
 const main = $('#main');
 const viewButtons = [...document.querySelectorAll('.view-nav button')];
 const searches = { date: '', project: '' };
+const sourceFilter = $('#source');
+const sourceNames = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi' };
+let allSessions = [];
 let snapshot;
 let snapshotText;
 let histories = new Map();
@@ -174,9 +177,24 @@ function searchQuery(mode) {
 
 function matchesSearch(entry, query) {
   return !query || [
-    entry.title, entry.preview, entry.projectName, entry.cwd, ...entry.files, ...(entry.promptTexts ?? []),
-  ].some(value => value.toLocaleLowerCase().includes(query));
+    entry.title, entry.preview, entry.projectName, entry.cwd, entry.id, sourceNames[entry.source ?? 'codex'],
+    ...entry.files, ...(entry.promptTexts ?? []),
+  ].some(value => value?.toLocaleLowerCase().includes(query));
 }
+
+function applySourceFilter() {
+  snapshot.sessions = sourceFilter.value
+    ? allSessions.filter(entry => (entry.source ?? 'codex') === sourceFilter.value)
+    : allSessions;
+  histories = indexProjects(snapshot.sessions);
+  if (project && !histories.has(project)) project = '';
+  day ||= snapshot.today;
+  applyFilter();
+}
+
+sourceFilter.addEventListener('change', () => {
+  if (snapshot) applySourceFilter();
+});
 
 function byDay() {
   const days = new Map();
@@ -464,7 +482,7 @@ function sessionRow(entry, peakTokens) {
   const time = el('span', 'time-range', entry.activityDays ? clock.format(entry.end) : timeRange(entry));
   if (entry.activityDays) time.title = 'Last recorded activity';
   const session = el('button', 'session-row',
-    el('span', 'row-time', time, fileInfo),
+    el('span', 'row-time', time, el('span', 'row-source', sourceNames[entry.source ?? 'codex']), fileInfo),
     el('span', 'session-info', label, preview),
     usage,
     el('span', 'row-chevron', icon('right')));
@@ -523,7 +541,7 @@ function sessionMetrics(entries, caption, includeActiveTime = false) {
     metric('tokens', 'Tokens', compact.format(totals.tokens), `${compact.format(totals.input)} in · ${compact.format(totals.output)} out`,
       `${number.format(totals.input)} input · ${number.format(totals.output)} output · ${number.format(totals.tokens)} total`),
     metric('file', 'Changed files', number.format(uniqueFiles), 'From recorded edits',
-      'Counts unique file paths reported by successful Codex patch events. Shell edits may be absent.'),
+      'Counts unique paths reported by successful file-edit tools. Shell edits may be absent.'),
   ];
   if (includeActiveTime) {
     tiles.push(metric('clock', 'Active time', duration(totals.activeMs), 'Approximate',
@@ -593,7 +611,7 @@ function dateView() {
         clearSearch();
         search.focus();
       })
-      : emptyView('calendar', 'No Codex activity yet', 'Local sessions will appear here after Codex starts recording activity.'));
+      : emptyView('calendar', 'No activity yet', 'Sessions appear here when the selected agents record local activity.'));
   }
   return nodes;
 }
@@ -604,7 +622,7 @@ function projectView() {
   }
   renderProjectList();
   const history = histories.get(currentProject);
-  if (!history) return [emptyView('folder', 'No projects yet', 'Projects will appear here after Codex records a session.')];
+  if (!history) return [emptyView('folder', 'No projects yet', 'Projects appear here when the selected agents record local activity.')];
 
   const title = el('h1', '', history.name);
   title.tabIndex = -1;
@@ -678,9 +696,16 @@ function shellWord(value) {
 }
 
 function resumePanel(entry) {
-  const directory = entry.cwd ? el('span', 'resume-argument', `--cd=${shellWord(entry.cwd)}`) : null;
-  const command = el('code', 'resume-command', 'codex resume ', directory, directory ? ' ' : null,
-    el('span', 'resume-argument', `-- ${shellWord(entry.id)}`));
+  const cwd = entry.cwd && shellWord(entry.cwd);
+  const id = shellWord(entry.id);
+  let resume;
+  if (entry.source === 'claude' || entry.source === 'pi') {
+    const invocation = entry.source === 'claude' ? `claude --resume ${id}` : `pi --session ${shellWord(entry.sessionFile || entry.id)}`;
+    resume = cwd ? `cd -- ${cwd} && ${invocation}` : invocation;
+  } else {
+    resume = `codex resume ${cwd ? `--cd=${cwd} ` : ''}-- ${id}`;
+  }
+  const command = el('code', 'resume-command', resume);
   const label = el('span', '', 'Copy');
   const copy = el('button', 'copy-command', icon('copy'), label);
   copy.type = 'button';
@@ -727,7 +752,7 @@ async function openDetail(entry, trigger) {
     ? `${formatDay(entry.firstDay)} ${clock.format(entry.start)} – ${formatDay(entry.day)} ${clock.format(entry.end)}`
     : `${formatDay(entry.day)} · ${timeRange(entry)}`;
   const heading = el('div', 'detail-intro',
-    el('p', 'detail-date', `${dateRange}${entry.archived ? ' · Archived' : ''}`),
+    el('p', 'detail-date', `${sourceNames[entry.source ?? 'codex']} · ${dateRange}${entry.archived ? ' · Archived' : ''}`),
     el('h2', '', entry.title),
     el('div', 'detail-location',
       el('p', 'detail-path', icon('folder'), entry.cwd || 'Working directory unavailable'),
@@ -756,7 +781,7 @@ async function openDetail(entry, trigger) {
   $('#close-detail').focus();
   try {
     const sessionDays = await Promise.all(activityDays.map(async date => {
-      const params = new URLSearchParams({ day: date, id: entry.id });
+      const params = new URLSearchParams({ source: entry.source ?? 'codex', day: date, id: entry.id });
       const response = await fetch(`/api/session?${params}`);
       if (!response.ok) throw new Error('Unavailable');
       return response.json();
@@ -787,9 +812,9 @@ async function refresh() {
     if (!response.ok) throw new Error('Unavailable');
     const text = await response.text();
     if (text === snapshotText) return;
-    const previous = snapshot;
     snapshot = JSON.parse(text);
     snapshotText = text;
+    allSessions = snapshot.sessions;
     zone = snapshot.timeZone || 'UTC';
     clock = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: zone });
     for (const entry of snapshot.sessions) {
@@ -797,17 +822,14 @@ async function refresh() {
         projectColor.set(entry.cwd, projectColors[projectColor.size % projectColors.length]);
       }
     }
-    histories = indexProjects(snapshot.sessions);
-    if (!day || !previous?.sessions.length && !searchQuery('date') && !project) day = snapshot.sessions[0]?.day || snapshot.today;
-    if (project && !histories.has(project)) project = '';
-    render();
+    applySourceFilter();
   } catch {
     if (snapshot) return;
     main.setAttribute('aria-busy', 'false');
     main.replaceChildren(el('section', 'empty',
       el('span', 'empty-icon', icon('activity')),
       el('h1', '', 'History is unavailable'),
-      el('p', '', 'Check that the local Worklog server is running and can read your Codex directory.')));
+      el('p', '', 'Check that the local Worklog server is running and can read your session directories.')));
   }
 }
 

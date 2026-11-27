@@ -35,9 +35,11 @@ Use Node.js 22.13 or newer. Stop any copy of Worklog started with `npm start` so
   plutil -insert ThrottleInterval -integer 5 "$worklog_stage"
   plutil -insert EnvironmentVariables -dictionary "$worklog_stage"
   plutil -insert EnvironmentVariables.PORT -string "3737" "$worklog_stage"
-  if [ -n "${CODEX_HOME:-}" ]; then
-    plutil -insert EnvironmentVariables.CODEX_HOME -string "$CODEX_HOME" "$worklog_stage"
-  fi
+  for worklog_key in CODEX_HOME CLAUDE_CONFIG_DIR PI_CODING_AGENT_DIR PI_CODING_AGENT_SESSION_DIR; do
+    if worklog_value="$(printenv "$worklog_key")" && [ -n "$worklog_value" ]; then
+      plutil -insert "EnvironmentVariables.$worklog_key" -string "$worklog_value" "$worklog_stage"
+    fi
+  done
   plutil -insert StandardOutPath -string "$worklog_logs/worklog.log" "$worklog_stage"
   plutil -insert StandardErrorPath -string "$worklog_logs/worklog.err.log" "$worklog_stage"
   plutil -lint "$worklog_stage"

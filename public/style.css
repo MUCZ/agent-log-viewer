@@ -172,6 +172,21 @@ button.pulse-cell:hover .pulse-fill, button.pulse-cell[aria-current] .pulse-fill
 }
 .breadcrumb { display: flex; align-items: center; gap: 9px; font-size: .875rem; font-weight: 640; white-space: nowrap; }
 .breadcrumb .icon { color: var(--accent-dark); }
+#source {
+  margin-inline-start: auto;
+  height: 35px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: .8125rem;
+}
+@media (max-width: 570px) {
+  .topbar .breadcrumb { display: none; }
+  .topbar #source { margin: 0; }
+  .topbar .search { flex: 1; }
+}
 .search {
   min-width: 0;
   width: min(288px, 100%);
@@ -396,6 +411,7 @@ summary::-webkit-details-marker { display: none; }
 .row-time, .row-stat { display: grid; gap: 3px; font-variant-numeric: tabular-nums; font-size: .75rem; }
 .row-time { grid-area: time; }
 .time-range { color: var(--muted); font-weight: 560; white-space: nowrap; }
+.row-source { color: var(--muted); font-size: .6875rem; }
 .row-stat { grid-area: stats; text-align: right; gap: 5px; }
 .row-tokens { color: #465973; font-weight: 600; white-space: nowrap; }
 .token-bar { display: flex; height: 4px; overflow: hidden; border-radius: 3px; background: #e8edf4; }
@@ -490,7 +506,6 @@ summary::-webkit-details-marker { display: none; }
   overflow-wrap: anywhere;
   user-select: all;
 }
-.resume-argument { display: inline-block; max-width: 100%; vertical-align: bottom; }
 .resume-session { display: flex; flex-wrap: wrap; gap: 3px 8px; margin-top: 7px; color: var(--muted); font-size: .75rem; }
 .resume-session code { min-width: 0; overflow-wrap: anywhere; user-select: all; }
 .resume-status:not(.copy-help) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
