@@ -21,12 +21,17 @@
         <button type="button" data-view="project" aria-pressed="false">By project</button>
       </nav>
       <section id="history" aria-label="Activity by day">
-        <div class="sidebar-section">
-          <div class="side-label">Last 14 days</div>
-          <div id="pulse" class="pulse" aria-label="Sessions in the last 14 days"></div>
-          <div id="pulse-range" class="pulse-range"></div>
+        <div class="calendar">
+          <div class="calendar-toolbar">
+            <button id="calendar-toggle" type="button" aria-expanded="true" aria-controls="calendar-body"><span id="calendar-month" aria-live="polite"></span></button>
+            <div id="calendar-controls"></div>
+          </div>
+          <div id="calendar-body">
+            <div id="calendar-grid" class="calendar-grid" role="group" aria-labelledby="calendar-month"></div>
+            <p id="calendar-stats" class="calendar-stats"></p>
+          </div>
         </div>
-        <div class="date-header side-label">History</div>
+        <div class="history-columns" aria-hidden="true"><span>History</span><span>Sessions</span><span>Tokens</span></div>
         <nav id="dates" class="date-list" aria-label="Activity dates"></nav>
       </section>
       <section id="project-history" aria-label="Activity by project" hidden>
