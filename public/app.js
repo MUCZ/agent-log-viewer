@@ -124,7 +124,6 @@ const sourceNames = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi' };
 let allSessions = [];
 let snapshot;
 let snapshotText;
-const dateProjects = new Map();
 let histories = new Map();
 let projectTree;
 const expandedFolders = new Map();
@@ -133,7 +132,6 @@ let includeSubfolders = true;
 let view = 'date';
 let currentProject;
 let day;
-let project = '';
 let savedDay;
 let detailRequest = 0;
 let detailTrigger;
@@ -188,9 +186,6 @@ function applySourceFilter() {
   snapshot.sessions = sourceFilter.value
     ? allSessions.filter(entry => (entry.source ?? 'codex') === sourceFilter.value)
     : allSessions;
-  dateProjects.clear();
-  for (const entry of snapshot.sessions) dateProjects.set(entry.cwd, entry.projectName);
-  if (project && !dateProjects.has(project)) project = '';
   projectTree = null;
   day ||= snapshot.today;
   if (view === 'date') applyFilter();
@@ -205,7 +200,7 @@ function byDay() {
   const days = new Map();
   const query = searchQuery('date');
   for (const entry of snapshot.sessions) {
-    if ((project && entry.cwd !== project) || !matchesSearch(entry, query)) continue;
+    if (!matchesSearch(entry, query)) continue;
     if (!days.has(entry.day)) days.set(entry.day, []);
     days.get(entry.day).push(entry);
   }
@@ -586,28 +581,6 @@ function projectIndex(groups, cards) {
   return distributionCard('Projects', unit, segments, index, el('span', 'section-count', number.format(groups.length)));
 }
 
-function projectFilter() {
-  const available = [...dateProjects].sort((a, b) => a[1].localeCompare(b[1]));
-  const select = el('select', '');
-  select.id = 'project';
-  select.setAttribute('aria-label', 'Filter by project');
-  select.append(new Option('All projects', ''));
-  for (const [cwd, name] of available) {
-    if (!cwd) continue;
-    const label = available.some(([other, label]) => label === name && other !== cwd) ? cwd : name;
-    const option = new Option(label, cwd);
-    option.title = cwd;
-    select.append(option);
-  }
-  select.value = project;
-  select.addEventListener('change', () => {
-    project = select.value;
-    applyFilter();
-    $('#project')?.focus({ preventScroll: true });
-  });
-  return el('div', 'select-wrap', icon('folder'), select, icon('down'));
-}
-
 function sessionRow(entry, peakTokens) {
   const label = el('span', 'session-title', entry.title);
   const trimmedTitle = entry.title.replace(/…$/, '').toLocaleLowerCase();
@@ -627,8 +600,8 @@ function sessionRow(entry, peakTokens) {
   if (entry.activityDays) time.title = 'Last recorded activity';
   const source = entry.source ?? 'codex';
   const session = el('button', 'session-row',
-    time, el('span', 'session-info',
-      el('span', `row-source harness-${source}`, harnessLabel(source)), label, preview),
+    time, el('span', `row-source harness-${source}`, harnessLabel(source)),
+    el('span', 'session-info', label, preview),
     fileInfo, usage,
     el('span', 'row-chevron', icon('right')));
   session.type = 'button';
@@ -714,25 +687,16 @@ function emptyView(glyph, heading, message, clearLabel, onClear) {
 function dateView() {
   const days = byDay();
   renderDates(days);
-  const dates = [...days.keys()];
   const entries = days.get(day) || [];
   const groups = projectGroups(entries);
-  const position = dates.indexOf(day);
-  const back = button('icon-button', 'Older activity date', 'left');
-  const forward = button('icon-button', 'Newer activity date', 'right');
-  back.disabled = position < 0 || position >= dates.length - 1;
-  forward.disabled = position < 1;
-  back.addEventListener('click', () => chooseDay(dates[position + 1], true));
-  forward.addEventListener('click', () => chooseDay(dates[position - 1], true));
   const dateTitle = dayFormat.format(parseDay(day));
   const title = el('h1', '', dateTitle);
   title.tabIndex = -1;
   const zoneLabel = zone.replaceAll('_', ' ');
   const year = parseDay(day).getFullYear();
   const heading = el('section', 'day-heading',
-    el('div', '', title, el('p', 'day-subtitle',
-      day === snapshot.today ? `Today · ${zoneLabel}` : `${year} · ${zoneLabel}`)),
-    el('div', 'heading-controls', projectFilter(), el('div', 'date-switch', back, forward)));
+    title, el('p', 'day-subtitle',
+      day === snapshot.today ? `Today · ${zoneLabel}` : `${year} · ${zoneLabel}`));
   const nodes = [heading];
 
   if (entries.length) {
@@ -747,10 +711,8 @@ function dateView() {
     rail.setAttribute('aria-label', 'Daily overview');
     nodes.push(el('div', 'activity-layout', timeline, rail));
   } else {
-    const filtered = Boolean(searchQuery('date') || project);
-    nodes.push(filtered
-      ? emptyView('search', 'No matching sessions', 'Try a different search or project.', 'Clear filters', () => {
-        project = '';
+    nodes.push(searchQuery('date')
+      ? emptyView('search', 'No matching sessions', 'Try a different search.', 'Clear search', () => {
         clearSearch();
         search.focus();
       })
@@ -766,7 +728,7 @@ function projectView() {
     projectTree = indexProjectTree(histories);
   }
   if (!projectTree.byPath.has(currentProject)) {
-    currentProject = project && histories.has(project) ? project : histories.keys().next().value;
+    currentProject = histories.keys().next().value;
     includeSubfolders = true;
     treeFocus = currentProject;
     for (let parent = projectTree.byPath.get(currentProject)?.parent; parent; parent = parent.parent) {
