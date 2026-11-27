@@ -274,16 +274,18 @@ function renderCalendar(totals) {
   for (let index = 0; index < (first.getDay() + 6) % 7; index++) grid.append(el('span'));
 
   const last = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  const dates = Array.from({ length: last }, (_, index) => `${calendarMonth}-${String(index + 1).padStart(2, '0')}`);
+  const peak = Math.max(1, ...dates.map(date => totals.get(date)?.tokens ?? 0));
   let activeDays = 0;
   let tokens = 0;
-  for (let dayNumber = 1; dayNumber <= last; dayNumber++) {
-    const date = `${calendarMonth}-${String(dayNumber).padStart(2, '0')}`;
+  for (const [index, date] of dates.entries()) {
     const data = totals.get(date);
-    const cell = el(data ? 'button' : 'span', 'calendar-day', String(dayNumber));
+    const cell = el(data ? 'button' : 'span', 'calendar-day', String(index + 1));
     if (data) {
       activeDays++;
       tokens += data.tokens;
       cell.type = 'button';
+      cell.dataset.level = Math.max(1, Math.ceil(3 * data.tokens / peak));
       cell.title = data.label;
       cell.setAttribute('aria-label', data.label);
       if (date === day) cell.setAttribute('aria-current', 'date');
