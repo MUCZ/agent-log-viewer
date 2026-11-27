@@ -1,46 +1,15 @@
-import { createReadStream } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
-import { basename, isAbsolute, join, normalize, relative } from 'node:path';
-import { createInterface } from 'node:readline';
+import { readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { cachedLogs, dayKey, filePaths, milliseconds, readJSONL, sessionActivity, summarize } from './session-log.mjs';
 
-const idleGap = 10 * 60 * 1000;
+export { dayKey } from './session-log.mjs';
 const internalSources = new Set(['subagent', 'guardian_review', 'onboarding_checklist']);
 const agentsHeader = /^# AGENTS\.md instructions[^\r\n]*\r?\n\s*<INSTRUCTIONS>\s*([\s\S]*?)\s*<\/INSTRUCTIONS>\s*/i;
-
-export function dayKey(timestamp) {
-  const date = new Date(timestamp);
-  return [date.getFullYear(), date.getMonth() + 1, date.getDate()]
-    .map(value => String(value).padStart(2, '0')).join('-');
-}
-
-function milliseconds(value) {
-  if (typeof value === 'number') return value < 1e12 ? value * 1000 : value;
-  return Date.parse(value);
-}
-
-function localMidnight(timestamp) {
-  const date = new Date(timestamp);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-}
 
 function isInternal(source, threadSource) {
   return internalSources.has(threadSource) || typeof source === 'object' && source !== null
     || typeof source === 'string' && source.includes('subagent');
-}
-
-async function* readJSONL(file, end) {
-  const lines = createInterface({
-    input: createReadStream(file, { encoding: 'utf8', end }),
-    crlfDelay: Infinity,
-  });
-  for await (const line of lines) {
-    try {
-      yield JSON.parse(line);
-    } catch {
-      // A running session can leave a partially written final record.
-    }
-  }
 }
 
 async function scanRollouts(directory, archived = false) {
@@ -71,7 +40,7 @@ async function threadMetadata(home) {
       const columns = new Set(db.prepare('PRAGMA table_info(threads)').all().map(row => row.name));
       if (!columns.has('id')) continue;
       const fields = [
-        'id', 'title', 'name', 'cwd', 'model', 'source', 'thread_source', 'archived',
+        'id', 'title', 'name', 'cwd', 'model', 'source', 'thread_source', 'archived', 'rollout_path',
       ].filter(field => columns.has(field));
       return new Map(db.prepare(`SELECT ${fields.join(', ')} FROM threads`).all().map(row => [row.id, row]));
     } catch (error) {
@@ -94,37 +63,28 @@ function promptContent(value) {
   return plainPrompt(value.map(part => part.text ?? '').join('\n'));
 }
 
-function headline(text, length = 96) {
-  const line = text?.replace(/\s+/g, ' ').trim();
-  if (!line) return '';
-  const points = Array.from(line);
-  return points.length <= length ? line : points.slice(0, length - 1).join('') + '…';
-}
-
-function filePaths(changes, cwd) {
-  const entries = Array.isArray(changes)
-    ? changes.flatMap(change => [change.path, change.move_path])
-    : Object.entries(changes ?? {}).flatMap(([path, change]) => [path, change?.move_path]);
-  return entries.filter(path => typeof path === 'string' && path.length).map(path => {
-    if (!cwd || !isAbsolute(path)) return normalize(path);
-    const short = relative(cwd, path);
-    return short && !short.startsWith('../') && !isAbsolute(short) ? short : path;
-  });
+function tokenValue(usage, key) {
+  if (!usage) return;
+  return usage[key + '_tokens'] ?? (key === 'total' ? usage.input_tokens + usage.output_tokens : undefined);
 }
 
 function tokenDeltas(records, buckets) {
-  let previous = { input: 0, output: 0, total: 0 };
-  for (const { time, usage } of records) {
+  const previous = { input: 0, output: 0, total: 0 };
+  const seen = new Set();
+  for (const { time, usage, delta, responseId } of records) {
+    if (responseId && seen.has(responseId)) continue;
+    if (responseId) seen.add(responseId);
     const tokens = buckets.get(dayKey(time)).tokens;
-    const values = {
-      input: usage.input_tokens,
-      output: usage.output_tokens,
-      total: usage.total_tokens ?? usage.input_tokens + usage.output_tokens,
-    };
-    for (const [key, value] of Object.entries(values)) {
-      if (!Number.isFinite(value)) continue;
-      tokens[key] += Math.max(0, value - previous[key]);
-      previous[key] = Math.max(previous[key], value);
+    for (const key of ['input', 'output', 'total']) {
+      const value = tokenValue(usage, key);
+      const increment = tokenValue(delta, key);
+      if (Number.isFinite(increment)) {
+        tokens[key] += Math.max(0, increment);
+        previous[key] = Number.isFinite(value) ? value : previous[key] + increment;
+      } else if (Number.isFinite(value)) {
+        tokens[key] += Math.max(0, value - previous[key]);
+        previous[key] = Math.max(previous[key], value);
+      }
     }
   }
 }
@@ -133,25 +93,14 @@ async function parseRollout(file, size) {
   let meta;
   let cwd;
   let lastModel;
-  const buckets = new Map();
-  const activity = [];
+  const activity = sessionActivity();
+  const { buckets, bucketAt } = activity;
   const modernUsage = [];
   const legacyUsage = [];
   const toolCalls = new Map();
   const systemPrompts = new Set();
   let agentsInstructions;
   let previousPrompt;
-
-  function bucketAt(time) {
-    const day = dayKey(time);
-    if (!buckets.has(day)) {
-      buckets.set(day, {
-        day, start: time, end: time, activeMs: 0, prompts: [], files: new Set(),
-        tokens: { input: 0, output: 0, total: 0 }, model: null,
-      });
-    }
-    return buckets.get(day);
-  }
 
   function onPrompt(time, text, source) {
     if (!text) return;
@@ -194,8 +143,8 @@ async function parseRollout(file, size) {
     if (record.type === 'turn_context') {
       lastModel = p.model || lastModel;
       cwd = p.cwd || cwd;
-    } else if (record.type === 'token_usage_record' && p.thread_token_usage) {
-      modernUsage.push({ time, usage: p.thread_token_usage });
+    } else if (record.type === 'token_usage_record' && (p.thread_token_usage || p.usage)) {
+      modernUsage.push({ time, usage: p.thread_token_usage, delta: p.usage, responseId: p.response_id });
     } else if (isEvent && p.type === 'token_count' && p.info?.total_token_usage) {
       legacyUsage.push({ time, usage: p.info.total_token_usage });
     } else if (isEvent && p.type === 'user_message') {
@@ -241,67 +190,55 @@ async function parseRollout(file, size) {
       || isEvent && /^(?:item_(?:started|completed)|task_(?:started|complete)|turn_aborted|user_message|agent_message|patch_apply_end)$/.test(p.type)
       || isEvent && p.type === 'token_count' && p.info;
     if (isActivity) {
-      activity.push(time);
-      const bucket = bucketAt(time);
-      bucket.start = Math.min(bucket.start, time);
-      bucket.end = Math.max(bucket.end, time);
+      const bucket = activity.record(time);
       bucket.model = lastModel || bucket.model;
     }
   }
-  if (!meta?.id) return null;
-  activity.sort((a, b) => a - b);
-  for (let index = 1; index < activity.length; index++) {
-    const previous = activity[index - 1];
-    const current = activity[index];
-    const gap = current - previous;
-    if (gap > idleGap) continue;
-    const startOfDay = localMidnight(current);
-    if (previous < startOfDay) {
-      bucketAt(previous).activeMs += startOfDay - previous;
-      bucketAt(current).activeMs += current - startOfDay;
-    } else {
-      bucketAt(current).activeMs += gap;
-    }
-  }
-  tokenDeltas(modernUsage.length ? modernUsage : legacyUsage, buckets);
-  return { meta, buckets, instructions: { system: [...systemPrompts].join('\n\n'), agents: agentsInstructions } };
+  if (typeof meta?.id !== 'string' || !meta.id) return null;
+  const usage = modernUsage.length ? modernUsage : legacyUsage;
+  return { meta, buckets, times: activity.times, usage,
+    instructions: { system: [...systemPrompts].join('\n\n'), agents: agentsInstructions } };
 }
 
-function summarize(meta, bucket, thread, archived) {
-  const cwd = thread?.cwd || meta.cwd || '';
-  const firstPrompt = bucket.prompts[0]?.text || '';
-  const title = headline(thread?.name || thread?.title) || headline(firstPrompt) || 'Untitled session';
-  return {
-    id: meta.id,
-    day: bucket.day,
-    start: bucket.start,
-    end: bucket.end,
-    activeMs: bucket.activeMs,
-    cwd,
-    projectName: cwd ? basename(cwd) || cwd : 'No working directory',
-    title,
-    preview: headline(firstPrompt, 180),
-    model: bucket.model || thread?.model || null,
-    turns: bucket.prompts.length,
-    files: [...bucket.files].sort(),
-    tokens: bucket.tokens,
-    archived: Boolean(thread?.archived || archived),
-  };
+function assemblePages(pages, thread) {
+  // New Codex rollouts append disjoint pages to a thread. Archived copies of
+  // the same page can coexist with its live file.
+  const unique = new Map();
+  for (const page of pages.sort((a, b) =>
+    Number(b.path === thread?.rollout_path) - Number(a.path === thread?.rollout_path)
+    || Number(a.archived) - Number(b.archived) || a.path.localeCompare(b.path))) {
+    const meta = page.parsed.meta;
+    const key = meta.history_mode === 'paginated' && meta.history_base
+      ? JSON.stringify([meta.timestamp, meta.history_base.end_ordinal_exclusive, meta.history_base.end_byte_offset]) : 'initial';
+    if (!unique.has(key)) unique.set(key, page);
+  }
+  const selected = [...unique.values()].sort((a, b) =>
+    (milliseconds(a.parsed.meta.timestamp) || a.parsed.times[0] || 0)
+    - (milliseconds(b.parsed.meta.timestamp) || b.parsed.times[0] || 0));
+  const activity = sessionActivity();
+  const usage = [];
+  const instructions = {};
+  for (const { parsed } of selected) {
+    for (const time of parsed.times) activity.record(time);
+    for (const slice of parsed.buckets.values()) {
+      const bucket = activity.bucketAt(slice.start);
+      for (const prompt of slice.prompts) bucket.prompts.push(prompt);
+      for (const file of slice.files) bucket.files.add(file);
+      bucket.model = slice.model || bucket.model;
+    }
+    for (const record of parsed.usage) usage.push(record);
+    instructions.system ||= parsed.instructions.system;
+    instructions.agents ||= parsed.instructions.agents;
+  }
+  for (const bucket of activity.buckets.values()) bucket.prompts.sort((a, b) => a.time - b.time);
+  activity.finish();
+  tokenDeltas(usage.sort((a, b) => a.time - b.time), activity.buckets);
+  return { meta: selected[0].parsed.meta, buckets: activity.buckets, instructions,
+    archived: selected.every(page => page.archived) };
 }
 
 export function codexSource(home) {
-  const cache = new Map();
-
-  async function read(file) {
-    const info = await stat(file.path);
-    if (!info.size) return null;
-    const signature = `${info.size}:${info.mtimeMs}`;
-    const earlier = cache.get(file.path);
-    if (earlier?.signature === signature) return earlier.parsed;
-    const parsed = await parseRollout(file, info.size);
-    cache.set(file.path, { signature, parsed });
-    return parsed;
-  }
+  const visit = cachedLogs(parseRollout);
 
   return async function load() {
     const [metadata, live, archived] = await Promise.all([
@@ -309,34 +246,23 @@ export function codexSource(home) {
       scanRollouts(join(home, 'archived_sessions'), true),
     ]);
     const files = [...live, ...archived];
-    const paths = new Set(files.map(file => file.path));
-    for (const path of cache.keys()) {
-      if (!paths.has(path)) cache.delete(path);
-    }
+    const threads = new Map();
+    const unreadable = await visit(files, (file, parsed) => {
+      const id = parsed.meta.id;
+      const thread = metadata.get(id);
+      if (isInternal(thread?.source, thread?.thread_source)) return;
+      if (!threads.has(id)) threads.set(id, []);
+      threads.get(id).push({ ...file, parsed });
+    });
     const sessions = new Map();
-    let unreadable = 0;
-    let next = 0;
-    await Promise.all(Array.from({ length: Math.min(6, files.length) }, async () => {
-      while (next < files.length) {
-        const file = files[next++];
-        const parsed = await read(file).catch(() => {
-          unreadable++;
-          return null;
-        });
-        if (!parsed) continue;
-        const { meta, buckets, instructions } = parsed;
-        const thread = metadata.get(meta.id);
-        if (isInternal(thread?.source, thread?.thread_source)) continue;
-        for (const bucket of buckets.values()) {
-          const summary = summarize(meta, bucket, thread, file.archived);
-          const key = `${summary.day}/${meta.id}`;
-          const existing = sessions.get(key);
-          if (!existing || file.archived === false) {
-            sessions.set(key, { summary, prompts: bucket.prompts, instructions });
-          }
-        }
+    for (const [id, pages] of threads) {
+      const thread = metadata.get(id);
+      const { meta, buckets, instructions, archived } = assemblePages(pages, thread);
+      for (const bucket of buckets.values()) {
+        const summary = summarize(meta, bucket, thread, archived);
+        sessions.set(`${summary.day}/${id}`, { summary, prompts: bucket.prompts, instructions });
       }
-    }));
+    }
     return { sessions, unreadable };
   };
 }

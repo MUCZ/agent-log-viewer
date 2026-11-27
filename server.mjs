@@ -1,14 +1,13 @@
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute } from 'node:path';
 import { promisify } from 'node:util';
-import { codexSource, dayKey } from './codex.mjs';
+import { sessionHistory } from './agent-sessions.mjs';
+import { dayKey } from './session-log.mjs';
 
 const port = Number(process.env.PORT || 3737);
-const home = resolve(process.env.CODEX_HOME || resolve(homedir(), '.codex'));
-const loadCodex = codexSource(home);
+const loadHistory = sessionHistory();
 const run = promisify(execFile);
 const files = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -30,12 +29,12 @@ let scannedAt = 0;
 let scan;
 async function getSnapshot() {
   if (snapshot && Date.now() - scannedAt < 10_000) return snapshot;
-  scan ??= loadCodex().then(result => {
+  scan ??= loadHistory().then(result => {
     const sessions = [...result.sessions.values()].map(({ summary, prompts }) => ({
       ...summary,
       promptTexts: prompts.map(prompt => prompt.text),
     }));
-    sessions.sort((a, b) => b.start - a.start);
+    sessions.sort((a, b) => b.start - a.start || a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
     const data = JSON.stringify({
       today: dayKey(Date.now()),
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -125,7 +124,8 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === '/api/session') {
       const { sessions } = await getSnapshot();
-      const key = `${url.searchParams.get('day')}/${url.searchParams.get('id')}`;
+      const source = url.searchParams.get('source') ?? 'codex';
+      const key = `${source}/${url.searchParams.get('day')}/${url.searchParams.get('id')}`;
       const session = sessions.get(key);
       return session ? json(response, 200, session) : json(response, 404, { error: 'This session is unavailable.' });
     }
@@ -135,7 +135,7 @@ const server = createServer(async (request, response) => {
     return respond(response, 200, file[1], content);
   } catch (error) {
     console.error('Worklog request failed:', error.code || error.message);
-    return json(response, 500, { error: 'Could not read the local Codex history.' });
+    return json(response, 500, { error: 'Could not read the local session history.' });
   }
 });
 
